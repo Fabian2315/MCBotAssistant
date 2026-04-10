@@ -18,6 +18,7 @@ const healthFill = document.getElementById('healthFill')
 const healthValue = document.getElementById('healthValue')
 const hungerFill = document.getElementById('hungerFill')
 const hungerValue = document.getElementById('hungerValue')
+const coordValue = document.getElementById('coordValue')
 const inventorySummary = document.getElementById('inventorySummary')
 const inventoryEmpty = document.getElementById('inventoryEmpty')
 const inventoryList = document.getElementById('inventoryList')
@@ -43,6 +44,11 @@ function renderVitals(state) {
 
   healthValue.textContent = health === null ? '-- / 20' : `${health.toFixed(1)} / 20`
   hungerValue.textContent = hunger === null ? '-- / 20' : `${hunger} / 20`
+
+  const pos = state.position
+  coordValue.textContent = pos
+    ? `${pos.x.toFixed(1)},  ${pos.y.toFixed(1)},  ${pos.z.toFixed(1)}`
+    : '-- / -- / --'
 }
 
 function renderInventory(state) {

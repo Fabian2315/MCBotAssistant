@@ -170,6 +170,14 @@ function getRuntimeState() {
     inventory
   }
 
+  runtimeState.position = connected && bot.entity
+    ? {
+        x: Math.round(bot.entity.position.x * 10) / 10,
+        y: Math.round(bot.entity.position.y * 10) / 10,
+        z: Math.round(bot.entity.position.z * 10) / 10
+      }
+    : null
+
   return runtimeState
 }
 
@@ -183,7 +191,8 @@ function getStateSignature(state) {
     viewerEnabled: state.viewerEnabled,
     health: state.health,
     hunger: state.hunger,
-    inventory: state.inventory
+    inventory: state.inventory,
+    position: state.position ? `${state.position.x},${state.position.y},${state.position.z}` : null
   })
 }
 
@@ -237,6 +246,10 @@ bot.once('spawn', () => {
 
   mcData = require('minecraft-data')(bot.version)
   defaultMove = new Movements(bot)
+  for (const name of ['seagrass', 'tall_seagrass']) {
+    const block = mcData.blocksByName[name]
+    if (block) defaultMove.blocksToAvoid.add(block.id)
+  }
   handleAutoEat(true)
   handleSelfDefenseStatus()
   pushWebLog('system', `Spawned as ${bot.username} on ${botSettings.host}:${botSettings.port}`)

@@ -100,7 +100,7 @@ h1 {
 
 .panel-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
 }
 
@@ -228,6 +228,10 @@ h1 {
   font-size: 0.85rem;
 }
 
+.coord-row {
+  grid-template-columns: 64px 1fr;
+}
+
 .inventory-summary {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.85rem;
@@ -334,6 +338,10 @@ h1 {
 }
 
 @media (max-width: 700px) {
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
   .command-form {
     grid-template-columns: 1fr;
   }
@@ -344,5 +352,11 @@ h1 {
 
   #viewerFrame {
     min-height: 52vh;
+  }
+}
+
+@media (min-width: 701px) and (max-width: 1050px) {
+  .panel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
