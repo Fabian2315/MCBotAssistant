@@ -6,6 +6,10 @@ A customizable Minecraft bot built with Mineflayer and plugins for navigation, P
 
 This project is vibecoded in large parts (including this readme), due to me being a bad dev and honestly I dont have any idea what I'm really doing. Also this code is kinda messy. Im currently a student and dont have to much motivation on hand to learn coding in my free time, so dont expect any changes in how I handle this project.
 
+## Chat Notice
+
+For the bot to respond in the in game chat, you need to go into the server.properties file and and change enforce-secure-profile to false. 
+
 ## Project Overview
 
 This project runs a local Minecraft bot (`Bot`) that listens to in-game chat commands.
