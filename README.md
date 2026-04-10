@@ -1,4 +1,4 @@
-# Mineflayer Bot
+# MCBotAssistant
 
 A customizable Minecraft bot built with Mineflayer and plugins for navigation, PvP, block collection, auto-eating, armor management, and inventory handling.
 
