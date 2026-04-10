@@ -177,6 +177,92 @@ h1 {
   gap: 0.6rem;
 }
 
+.viewer-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.viewer-notice {
+  margin-bottom: 0.7rem;
+}
+
+.vitals-grid {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.vital-row {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.vital-label {
+  font-weight: 700;
+}
+
+.meter {
+  width: 100%;
+  height: 12px;
+  background: #e2ded2;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #b93a3a, #e7512f);
+  transition: width 220ms ease;
+}
+
+.meter-fill-hunger {
+  background: linear-gradient(90deg, #b27612, #f0a202);
+}
+
+.vital-value {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.85rem;
+}
+
+.inventory-summary {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.85rem;
+  margin-bottom: 0.4rem;
+}
+
+.inventory-empty {
+  color: #635f54;
+  font-size: 0.92rem;
+}
+
+.inventory-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #d7d1c3;
+  border-radius: 0.6rem;
+  background: var(--panel-2);
+}
+
+.inventory-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid #ece7da;
+  font-size: 0.9rem;
+}
+
+.inventory-list li:last-child {
+  border-bottom: 0;
+}
+
 #viewerFrame {
   width: 100%;
   min-height: 64vh;

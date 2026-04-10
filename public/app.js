@@ -10,10 +10,54 @@ const settingsNotice = document.getElementById('settingsNotice')
 const logsView = document.getElementById('logsView')
 const viewerFrame = document.getElementById('viewerFrame')
 const viewerLink = document.getElementById('viewerLink')
+const viewerNotice = document.getElementById('viewerNotice')
+const toggleViewer = document.getElementById('toggleViewer')
 const restartBotBtn = document.getElementById('restartBotBtn')
 const shutdownBtn = document.getElementById('shutdownBtn')
+const healthFill = document.getElementById('healthFill')
+const healthValue = document.getElementById('healthValue')
+const hungerFill = document.getElementById('hungerFill')
+const hungerValue = document.getElementById('hungerValue')
+const inventorySummary = document.getElementById('inventorySummary')
+const inventoryEmpty = document.getElementById('inventoryEmpty')
+const inventoryList = document.getElementById('inventoryList')
 
 let latestState = null
+
+function clampToPercent(value, max) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0
+  if (max <= 0) return 0
+  return Math.max(0, Math.min(100, (value / max) * 100))
+}
+
+function formatStackName(name) {
+  return String(name || 'unknown_item').replace(/_/g, ' ')
+}
+
+function renderVitals(state) {
+  const health = typeof state.health === 'number' ? state.health : null
+  const hunger = typeof state.hunger === 'number' ? state.hunger : null
+
+  healthFill.style.width = `${clampToPercent(health, 20)}%`
+  hungerFill.style.width = `${clampToPercent(hunger, 20)}%`
+
+  healthValue.textContent = health === null ? '-- / 20' : `${health.toFixed(1)} / 20`
+  hungerValue.textContent = hunger === null ? '-- / 20' : `${hunger} / 20`
+}
+
+function renderInventory(state) {
+  const inventory = Array.isArray(state.inventory) ? state.inventory : []
+  const totalItems = inventory.reduce((sum, item) => sum + (Number(item.count) || 0), 0)
+  inventorySummary.textContent = `${inventory.length} stacks | ${totalItems} items`
+  inventoryEmpty.style.display = inventory.length ? 'none' : 'block'
+  inventoryList.innerHTML = ''
+
+  inventory.forEach((item) => {
+    const line = document.createElement('li')
+    line.innerHTML = `<span>${formatStackName(item.name)}</span><strong>x${item.count}</strong>`
+    inventoryList.appendChild(line)
+  })
+}
 
 function setStatus(state) {
   latestState = state
@@ -27,8 +71,22 @@ function setStatus(state) {
   toggleAutoEat.textContent = `Auto Eat: ${state.autoEatEnabled ? 'ON' : 'OFF'}`
   toggleAutoEat.style.background = state.autoEatEnabled ? '#1c7c54' : '#a63a50'
 
-  viewerFrame.src = state.viewerUrl
+  toggleViewer.textContent = `Viewer: ${state.viewerEnabled ? 'ON' : 'OFF'}`
+  toggleViewer.style.background = state.viewerEnabled ? '#1c7c54' : '#a63a50'
+
+  if (state.viewerEnabled) {
+    if (viewerFrame.src !== state.viewerUrl) {
+      viewerFrame.src = state.viewerUrl
+    }
+    viewerNotice.textContent = `Viewer is live at ${state.viewerUrl}`
+  } else {
+    viewerFrame.src = 'about:blank'
+    viewerNotice.textContent = 'Viewer is disabled. Toggle it ON to start Prismarine Viewer.'
+  }
+
   viewerLink.href = state.viewerUrl
+  renderVitals(state)
+  renderInventory(state)
 }
 
 function appendLog(log) {
@@ -103,6 +161,14 @@ toggleSelfDefense.addEventListener('click', async () => {
 toggleAutoEat.addEventListener('click', async () => {
   try {
     await postJson('/api/toggle/autoEat')
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+})
+
+toggleViewer.addEventListener('click', async () => {
+  try {
+    await postJson('/api/toggle/viewer')
   } catch (error) {
     appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
   }

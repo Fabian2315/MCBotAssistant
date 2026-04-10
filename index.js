@@ -117,8 +117,10 @@ let trackedGoalState = {
 }
 
 let autoEatEnabled = false
+let viewerEnabled = true
 let io = null
 const webLogs = []
+let lastStateSignature = ''
 
 function pushWebLog(type, message) {
   const entry = {
@@ -138,26 +140,101 @@ function pushWebLog(type, message) {
 }
 
 function getRuntimeState() {
-  return {
+  const connected = Boolean(bot.player)
+  const inventory = connected
+    ? bot.inventory.items().map((item) => ({
+      name: item.displayName || item.name || `item_${item.type}`,
+      count: item.count,
+      slot: item.slot
+    }))
+    : []
+
+  inventory.sort((a, b) => {
+    if (a.name === b.name) return a.slot - b.slot
+    return a.name.localeCompare(b.name)
+  })
+
+  const runtimeState = {
     username: bot.username,
     host: botSettings.host,
     port: botSettings.port,
-    connected: Boolean(bot.player),
+    connected,
     selfDefenseEnabled,
     autoEatEnabled,
     miningEnabled,
     guardEnabled: Boolean(guardPos),
-    viewerUrl: `http://localhost:${botSettings.viewerPort}`
+    viewerEnabled,
+    viewerUrl: `http://localhost:${botSettings.viewerPort}`,
+    health: connected && typeof bot.health === 'number' ? bot.health : null,
+    hunger: connected && typeof bot.food === 'number' ? bot.food : null,
+    inventory
   }
+
+  return runtimeState
 }
 
-function broadcastState() {
-  if (!io) return
-  io.emit('state', getRuntimeState())
+function getStateSignature(state) {
+  return JSON.stringify({
+    connected: state.connected,
+    selfDefenseEnabled: state.selfDefenseEnabled,
+    autoEatEnabled: state.autoEatEnabled,
+    miningEnabled: state.miningEnabled,
+    guardEnabled: state.guardEnabled,
+    viewerEnabled: state.viewerEnabled,
+    health: state.health,
+    hunger: state.hunger,
+    inventory: state.inventory
+  })
 }
+
+function startViewer() {
+  if (!bot?.player) return false
+  if (bot.viewer && typeof bot.viewer.close === 'function') return true
+
+  mineflayerViewer(bot, { port: botSettings.viewerPort, firstPerson: true })
+  pushWebLog('system', `Prismarine viewer started on port ${botSettings.viewerPort}`)
+  return true
+}
+
+function stopViewer() {
+  if (!bot?.viewer || typeof bot.viewer.close !== 'function') return false
+
+  bot.viewer.close()
+  delete bot.viewer
+  pushWebLog('system', 'Prismarine viewer stopped')
+  return true
+}
+
+function setViewerEnabled(enabled) {
+  viewerEnabled = Boolean(enabled)
+
+  if (viewerEnabled) {
+    startViewer()
+  } else {
+    stopViewer()
+  }
+
+  broadcastState()
+}
+
+function broadcastState(force = false) {
+  if (!io) return
+  const state = getRuntimeState()
+  const signature = getStateSignature(state)
+  if (!force && signature === lastStateSignature) return
+  lastStateSignature = signature
+  io.emit('state', state)
+}
+
+setInterval(() => {
+  broadcastState()
+}, 1000)
 
 bot.once('spawn', () => {
-  mineflayerViewer(bot, { port: botSettings.viewerPort, firstPerson: true })
+  if (viewerEnabled) {
+    startViewer()
+  }
+
   mcData = require('minecraft-data')(bot.version)
   defaultMove = new Movements(bot)
   handleAutoEat(true)
@@ -1085,6 +1162,7 @@ async function restartBot() {
     meta: null
   }
   autoEatEnabled = false
+  stopViewer()
   mcData = null
   defaultMove = null
   
@@ -1168,6 +1246,11 @@ function startWebServer() {
     if (toggleName === 'autoEat') {
       handleAutoEat(!autoEatEnabled)
       return res.json({ ok: true, autoEatEnabled })
+    }
+
+    if (toggleName === 'viewer') {
+      setViewerEnabled(!viewerEnabled)
+      return res.json({ ok: true, viewerEnabled })
     }
 
     return res.status(404).json({ ok: false, error: `Unknown toggle ${toggleName}` })

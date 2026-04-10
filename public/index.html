@@ -30,6 +30,31 @@
     <section class="tab-panel active" id="controls">
       <div class="panel-grid">
         <article class="card">
+          <h2>Bot Vitals</h2>
+          <p class="muted">Live survival stats from the connected bot.</p>
+          <div class="vitals-grid">
+            <div class="vital-row">
+              <div class="vital-label">Health</div>
+              <div class="meter"><div id="healthFill" class="meter-fill"></div></div>
+              <div id="healthValue" class="vital-value">-- / 20</div>
+            </div>
+            <div class="vital-row">
+              <div class="vital-label">Hunger</div>
+              <div class="meter"><div id="hungerFill" class="meter-fill meter-fill-hunger"></div></div>
+              <div id="hungerValue" class="vital-value">-- / 20</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>Inventory</h2>
+          <p class="muted">Item stacks currently in the bot inventory.</p>
+          <div id="inventorySummary" class="inventory-summary">0 stacks</div>
+          <div id="inventoryEmpty" class="inventory-empty">No items in inventory.</div>
+          <ul id="inventoryList" class="inventory-list"></ul>
+        </article>
+
+        <article class="card">
           <h2>Toggle Settings</h2>
           <p class="muted">One-click toggles for all runtime bot settings.</p>
           <div class="toggle-group">
@@ -74,8 +99,12 @@
       <article class="card viewer-card">
         <div class="viewer-head">
           <h2>Integrated Prismarine Viewer</h2>
-          <a id="viewerLink" href="http://localhost:3008" target="_blank" rel="noreferrer">Open in new tab</a>
+          <div class="viewer-controls">
+            <button id="toggleViewer" class="action-btn">Viewer: ...</button>
+            <a id="viewerLink" href="http://localhost:3008" target="_blank" rel="noreferrer">Open in new tab</a>
+          </div>
         </div>
+        <p id="viewerNotice" class="muted viewer-notice"></p>
         <iframe id="viewerFrame" title="Prismarine Viewer" src="http://localhost:3008"></iframe>
       </article>
     </section>
