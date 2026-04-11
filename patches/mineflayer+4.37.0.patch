@@ -1,0 +1,22 @@
+diff --git a/node_modules/mineflayer/lib/plugins/physics.js b/node_modules/mineflayer/lib/plugins/physics.js
+index cecae69..4d0789f 100644
+--- a/node_modules/mineflayer/lib/plugins/physics.js
++++ b/node_modules/mineflayer/lib/plugins/physics.js
+@@ -79,7 +79,16 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+     if (!bot.entity?.position || !Number.isFinite(bot.entity.position.x)) return // entity not ready
+     if (bot.blockAt(bot.entity.position) == null) return // check if chunk is unloaded
+     if (bot.physicsEnabled && shouldUsePhysics) {
+-      physics.simulatePlayer(new PlayerState(bot, controlState), world).apply(bot)
++      const simulatedState = physics.simulatePlayer(new PlayerState(bot, controlState), world)
++      if (!Number.isFinite(simulatedState.pos.x) || !Number.isFinite(simulatedState.pos.y) || !Number.isFinite(simulatedState.pos.z)) {
++        simulatedState.pos.x = bot.entity.position.x
++        simulatedState.pos.y = bot.entity.position.y
++        simulatedState.pos.z = bot.entity.position.z
++        simulatedState.vel.x = 0
++        simulatedState.vel.y = 0
++        simulatedState.vel.z = 0
++      }
++      simulatedState.apply(bot)
+       bot.emit('physicsTick')
+       bot.emit('physicTick') // Deprecated, only exists to support old plugins. May be removed in the future
+     }
