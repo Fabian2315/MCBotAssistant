@@ -51,6 +51,7 @@
       <section class="content">
         <nav class="tab-bar">
           <button class="tab active" data-tab="controls">Controls</button>
+          <button class="tab" data-tab="queue">Command Queue</button>
           <button class="tab" data-tab="commands">Command Overview</button>
           <button class="tab" data-tab="viewer">Prismarine Viewer</button>
           <button class="tab" data-tab="settings">Settings</button>
@@ -128,6 +129,81 @@
               <div class="quick-actions">
                 <button id="restartBotBtn" class="action-btn action-btn-primary">Restart Bots</button>
                 <button id="shutdownBtn" class="action-btn action-btn-danger">Shutdown Server</button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="queue">
+          <div class="panel-grid queue-grid">
+            <article class="card">
+              <h2>Add Queue Step</h2>
+              <p class="muted">Build staged actions for the selected target. Wait-for-completion works with Bot.goto commands.</p>
+              <form id="queueStepForm" class="settings-form queue-step-form">
+                <label>Step Type
+                  <select id="queueStepType">
+                    <option value="command">Command</option>
+                    <option value="wait">Wait</option>
+                  </select>
+                </label>
+
+                <label id="queueCommandRow">Command
+                  <input id="queueCommandInput" type="text" placeholder="goto 100 64 200">
+                </label>
+
+                <label id="queueWaitCompletionRow" class="check-row">
+                  <input id="queueWaitCompletionInput" type="checkbox">
+                  Wait for command completion
+                </label>
+
+                <label id="queueWaitSecondsRow" class="hidden">Wait (seconds)
+                  <input id="queueWaitSecondsInput" type="number" min="1" step="1" value="5">
+                </label>
+
+                <div class="inline-actions wide">
+                  <button type="submit">Add Step</button>
+                </div>
+              </form>
+            </article>
+
+            <article class="card">
+              <h2>Queue Run Settings</h2>
+              <p class="muted">Choose what happens when a step fails or times out.</p>
+              <form id="queueSettingsForm" class="settings-form">
+                <label>On Failure
+                  <select id="queueOnFailureInput">
+                    <option value="stop">Stop queue</option>
+                    <option value="skip">Skip step</option>
+                    <option value="retry">Retry</option>
+                  </select>
+                </label>
+
+                <label>Retry Count
+                  <input id="queueRetryCountInput" type="number" min="0" max="10" step="1" value="1">
+                </label>
+
+                <label>Completion Timeout (seconds)
+                  <input id="queueTimeoutSecInput" type="number" min="5" max="600" step="1" value="60">
+                </label>
+
+                <div class="inline-actions wide">
+                  <button type="submit">Save Queue Settings</button>
+                </div>
+              </form>
+            </article>
+
+            <article class="card queue-list-card">
+              <div class="side-head">
+                <h2>Queued Steps</h2>
+                <div id="queueStatusBadge" class="status-pill">Idle</div>
+              </div>
+              <p id="queueRunInfo" class="muted">No queued steps.</p>
+              <div id="queuePerBotStatus" class="list queue-per-bot"></div>
+              <div id="queueStepsList" class="list queue-steps-list"></div>
+              <div class="inline-actions wide">
+                <button id="queueStartBtn" type="button" class="action-btn action-btn-primary">Start Queue</button>
+                <button id="queueStopBtn" type="button" class="action-btn action-btn-danger">Stop Queue</button>
+                <button id="queueClearBtn" type="button">Clear Queue</button>
               </div>
             </article>
           </div>

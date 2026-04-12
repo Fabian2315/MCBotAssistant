@@ -568,6 +568,37 @@ button,
   display: none;
 }
 
+.queue-grid {
+  align-items: start;
+}
+
+.queue-list-card {
+  grid-column: 1 / -1;
+}
+
+.queue-step-form .check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.queue-steps-list {
+  margin-top: 0.5rem;
+}
+
+.queue-step-row {
+  align-items: center;
+}
+
+.queue-inline-actions {
+  margin-left: auto;
+}
+
+.queue-per-bot {
+  margin-top: 0.4rem;
+}
+
 @media (max-width: 960px) {
   .main-grid {
     grid-template-columns: 1fr;

@@ -21,6 +21,11 @@
     "selfDefenseTargetDistance": 12,
     "selfDefenseChaseDistance": 14
   },
+  "queueSettings": {
+    "onFailure": "stop",
+    "retryCount": 1,
+    "completionTimeoutSec": 60
+  },
   "bots": [],
   "groups": []
 }

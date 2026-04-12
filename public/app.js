@@ -26,6 +26,25 @@ const coordValue = document.getElementById('coordValue')
 const inventorySummary = document.getElementById('inventorySummary')
 const inventoryEmpty = document.getElementById('inventoryEmpty')
 const inventoryList = document.getElementById('inventoryList')
+const queueStepForm = document.getElementById('queueStepForm')
+const queueStepType = document.getElementById('queueStepType')
+const queueCommandRow = document.getElementById('queueCommandRow')
+const queueCommandInput = document.getElementById('queueCommandInput')
+const queueWaitCompletionRow = document.getElementById('queueWaitCompletionRow')
+const queueWaitCompletionInput = document.getElementById('queueWaitCompletionInput')
+const queueWaitSecondsRow = document.getElementById('queueWaitSecondsRow')
+const queueWaitSecondsInput = document.getElementById('queueWaitSecondsInput')
+const queueSettingsForm = document.getElementById('queueSettingsForm')
+const queueOnFailureInput = document.getElementById('queueOnFailureInput')
+const queueRetryCountInput = document.getElementById('queueRetryCountInput')
+const queueTimeoutSecInput = document.getElementById('queueTimeoutSecInput')
+const queueStatusBadge = document.getElementById('queueStatusBadge')
+const queueRunInfo = document.getElementById('queueRunInfo')
+const queuePerBotStatus = document.getElementById('queuePerBotStatus')
+const queueStepsList = document.getElementById('queueStepsList')
+const queueStartBtn = document.getElementById('queueStartBtn')
+const queueStopBtn = document.getElementById('queueStopBtn')
+const queueClearBtn = document.getElementById('queueClearBtn')
 
 const openAddBotBtn = document.getElementById('openAddBotBtn')
 const closeAddBotBtn = document.getElementById('closeAddBotBtn')
@@ -58,6 +77,20 @@ let dashboardState = {
 let selectedTarget = 'starter'
 let selectedBotForDetails = 'starter'
 let editingGroupId = null
+let selectedQueue = {
+  target: 'starter',
+  steps: [],
+  running: false,
+  stopRequested: false,
+  currentStepIndex: -1,
+  settings: {
+    onFailure: 'stop',
+    retryCount: 1,
+    completionTimeoutSec: 60
+  },
+  perBot: {},
+  lastError: null
+}
 
 function clampToPercent(value, max) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 0
@@ -95,6 +128,15 @@ async function postJson(url, body = {}) {
     throw new Error(errorText || `Request failed: ${response.status}`)
   }
 
+  return response.json()
+}
+
+async function getJson(url) {
+  const response = await fetch(url)
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || `Request failed: ${response.status}`)
+  }
   return response.json()
 }
 
@@ -380,6 +422,155 @@ function renderAll() {
   renderViewerTargetSelect()
   renderVitals()
   renderStatusAndViewer()
+  renderQueueControls()
+  renderQueue()
+}
+
+function queueIsCommandWaitable(command) {
+  const text = String(command || '').trim()
+  if (!text) return false
+  const normalized = text.startsWith('Bot.') ? text : `Bot.${text}`
+  return normalized.startsWith('Bot.goto ') || normalized === 'Bot.goto.nearest'
+}
+
+function renderQueueControls() {
+  if (!queueStepType) return
+
+  const commandStep = queueStepType.value === 'command'
+  queueCommandRow.classList.toggle('hidden', !commandStep)
+  queueWaitCompletionRow.classList.toggle('hidden', !commandStep)
+  queueWaitSecondsRow.classList.toggle('hidden', commandStep)
+
+  const canWait = queueIsCommandWaitable(queueCommandInput.value)
+  queueWaitCompletionInput.disabled = !canWait
+  if (!canWait) {
+    queueWaitCompletionInput.checked = false
+    queueWaitCompletionRow.title = 'Wait for completion is only available for Bot.goto variants'
+  } else {
+    queueWaitCompletionRow.title = ''
+  }
+}
+
+function queueStepSummary(step) {
+  if (step.type === 'wait') {
+    return `Wait ${step.seconds}s`
+  }
+
+  const waitText = step.waitForCompletion ? ' (wait for completion)' : ''
+  return `${step.command}${waitText}`
+}
+
+function renderQueue() {
+  if (!queueStatusBadge) return
+
+  const stepCount = Array.isArray(selectedQueue.steps) ? selectedQueue.steps.length : 0
+  queueStatusBadge.textContent = selectedQueue.running ? 'Running' : 'Idle'
+  queueStatusBadge.style.background = selectedQueue.running ? 'rgba(28,124,84,0.35)' : 'rgba(31,42,45,0.2)'
+
+  if (selectedQueue.lastError) {
+    queueRunInfo.textContent = `Error: ${selectedQueue.lastError}`
+    queueRunInfo.style.color = '#a63a50'
+  } else {
+    queueRunInfo.style.color = ''
+    queueRunInfo.textContent = selectedQueue.running
+      ? `Step ${Math.max(0, selectedQueue.currentStepIndex + 1)} of ${stepCount}`
+      : `${stepCount} step${stepCount === 1 ? '' : 's'} queued`
+  }
+
+  queuePerBotStatus.innerHTML = ''
+  for (const [botId, state] of Object.entries(selectedQueue.perBot || {})) {
+    const row = document.createElement('div')
+    row.className = 'list-row'
+    row.innerHTML = `<strong>${botId}</strong><span>${state.status}${state.error ? ` | ${state.error}` : ''}</span>`
+    queuePerBotStatus.appendChild(row)
+  }
+
+  queueStepsList.innerHTML = ''
+  selectedQueue.steps.forEach((step, index) => {
+    const row = document.createElement('div')
+    const isCurrent = selectedQueue.running && selectedQueue.currentStepIndex === index
+    row.className = `list-row queue-step-row ${isCurrent ? 'active' : ''}`
+
+    const text = document.createElement('span')
+    text.textContent = `${index + 1}. ${queueStepSummary(step)}`
+    row.appendChild(text)
+
+    const actions = document.createElement('div')
+    actions.className = 'inline-actions queue-inline-actions'
+
+    const up = document.createElement('button')
+    up.className = 'mini-btn'
+    up.textContent = 'Up'
+    up.disabled = selectedQueue.running || index === 0
+    up.addEventListener('click', async () => {
+      await reorderQueueStep(index, index - 1)
+    })
+
+    const down = document.createElement('button')
+    down.className = 'mini-btn'
+    down.textContent = 'Down'
+    down.disabled = selectedQueue.running || index === selectedQueue.steps.length - 1
+    down.addEventListener('click', async () => {
+      await reorderQueueStep(index, index + 1)
+    })
+
+    const del = document.createElement('button')
+    del.className = 'mini-btn danger'
+    del.textContent = 'Remove'
+    del.disabled = selectedQueue.running
+    del.addEventListener('click', async () => {
+      try {
+        await deleteJson(`/api/queue/steps/${step.id}?target=${encodeURIComponent(selectedTarget)}`)
+        await loadSelectedQueue()
+      } catch (error) {
+        appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+      }
+    })
+
+    actions.appendChild(up)
+    actions.appendChild(down)
+    actions.appendChild(del)
+    row.appendChild(actions)
+    queueStepsList.appendChild(row)
+  })
+
+  queueStartBtn.disabled = selectedQueue.running || !selectedQueue.steps.length
+  queueStopBtn.disabled = !selectedQueue.running
+  queueClearBtn.disabled = selectedQueue.running || !selectedQueue.steps.length
+  queueSettingsForm.querySelectorAll('input,select,button').forEach((el) => {
+    el.disabled = selectedQueue.running
+  })
+}
+
+async function loadSelectedQueue() {
+  try {
+    const result = await getJson(`/api/queue?target=${encodeURIComponent(selectedTarget)}`)
+    if (result?.queue) {
+      selectedQueue = result.queue
+      queueOnFailureInput.value = selectedQueue.settings?.onFailure || 'stop'
+      queueRetryCountInput.value = selectedQueue.settings?.retryCount ?? 1
+      queueTimeoutSecInput.value = selectedQueue.settings?.completionTimeoutSec ?? 60
+      renderQueue()
+    }
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+}
+
+async function reorderQueueStep(fromIndex, toIndex) {
+  const steps = [...selectedQueue.steps]
+  const [moved] = steps.splice(fromIndex, 1)
+  steps.splice(toIndex, 0, moved)
+
+  try {
+    await putJson('/api/queue/steps', {
+      target: selectedTarget,
+      stepIds: steps.map((step) => step.id)
+    })
+    await loadSelectedQueue()
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
 }
 
 function readSettingsForm() {
@@ -441,6 +632,15 @@ commandTarget.addEventListener('change', () => {
   selectedTarget = commandTarget.value
   renderBots()
   renderGroups()
+  loadSelectedQueue()
+})
+
+queueStepType.addEventListener('change', () => {
+  renderQueueControls()
+})
+
+queueCommandInput.addEventListener('input', () => {
+  renderQueueControls()
 })
 
 document.querySelectorAll('.tab').forEach((button) => {
@@ -670,6 +870,8 @@ socket.on('bootstrap', ({ state, settings, logs }) => {
   }
 
   renderAll()
+  renderQueueControls()
+  loadSelectedQueue()
 })
 
 socket.on('state', (state) => {
@@ -684,6 +886,16 @@ socket.on('state', (state) => {
   }
 
   renderAll()
+  loadSelectedQueue()
+})
+
+socket.on('queue_state', ({ target, queue }) => {
+  if (String(target) !== String(selectedTarget)) return
+  selectedQueue = queue
+  queueOnFailureInput.value = selectedQueue.settings?.onFailure || 'stop'
+  queueRetryCountInput.value = selectedQueue.settings?.retryCount ?? 1
+  queueTimeoutSecInput.value = selectedQueue.settings?.completionTimeoutSec ?? 60
+  renderQueue()
 })
 
 socket.on('log', (log) => {
@@ -701,5 +913,87 @@ socket.on('auth_done', ({ botId }) => {
     setTimeout(() => {
       authModal.classList.add('hidden')
     }, 1200)
+  }
+})
+
+queueStepForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const type = queueStepType.value
+
+  try {
+    if (type === 'command') {
+      const command = queueCommandInput.value.trim()
+      if (!command) return
+      await postJson('/api/queue/step', {
+        target: selectedTarget,
+        step: {
+          type: 'command',
+          command,
+          waitForCompletion: queueWaitCompletionInput.checked
+        }
+      })
+      queueCommandInput.value = ''
+      queueWaitCompletionInput.checked = false
+      renderQueueControls()
+    } else {
+      const seconds = Number(queueWaitSecondsInput.value)
+      if (!Number.isFinite(seconds) || seconds < 1) return
+      await postJson('/api/queue/step', {
+        target: selectedTarget,
+        step: {
+          type: 'wait',
+          seconds
+        }
+      })
+    }
+
+    await loadSelectedQueue()
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+})
+
+queueSettingsForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+
+  try {
+    await postJson('/api/queue/settings', {
+      target: selectedTarget,
+      settings: {
+        onFailure: queueOnFailureInput.value,
+        retryCount: Number(queueRetryCountInput.value),
+        completionTimeoutSec: Number(queueTimeoutSecInput.value)
+      }
+    })
+    await loadSelectedQueue()
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+})
+
+queueStartBtn.addEventListener('click', async () => {
+  try {
+    await postJson('/api/queue/start', { target: selectedTarget, username: 'WebUI' })
+    await loadSelectedQueue()
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+})
+
+queueStopBtn.addEventListener('click', async () => {
+  try {
+    await postJson('/api/queue/stop', { target: selectedTarget })
+    await loadSelectedQueue()
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+})
+
+queueClearBtn.addEventListener('click', async () => {
+  try {
+    await postJson('/api/queue/clear', { target: selectedTarget })
+    await loadSelectedQueue()
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
   }
 })

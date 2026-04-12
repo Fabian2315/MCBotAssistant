@@ -32,6 +32,12 @@ const DEFAULT_COMMAND_SETTINGS = {
   selfDefenseChaseDistance: 14
 }
 
+const DEFAULT_QUEUE_SETTINGS = {
+  onFailure: 'stop',
+  retryCount: 1,
+  completionTimeoutSec: 60
+}
+
 const DEFAULT_BOT_SETTINGS = {
   host: 'localhost',
   port: 25565,
@@ -44,6 +50,7 @@ const DEFAULT_BOT_SETTINGS = {
   viewerEnabled: true,
   viewerTargetBotId: STARTER_BOT_ID,
   commandSettings: { ...DEFAULT_COMMAND_SETTINGS },
+  queueSettings: { ...DEFAULT_QUEUE_SETTINGS },
   bots: [],
   groups: []
 }
@@ -85,6 +92,18 @@ function normalizeCommandSettings(settings) {
   }
 }
 
+function normalizeQueueSettings(settings) {
+  const input = settings || {}
+  const onFailureRaw = String(input.onFailure || DEFAULT_QUEUE_SETTINGS.onFailure).toLowerCase()
+  const onFailure = ['stop', 'skip', 'retry'].includes(onFailureRaw) ? onFailureRaw : DEFAULT_QUEUE_SETTINGS.onFailure
+
+  return {
+    onFailure,
+    retryCount: normalizeNumber(input.retryCount, DEFAULT_QUEUE_SETTINGS.retryCount, { min: 0, max: 10, integer: true }),
+    completionTimeoutSec: normalizeNumber(input.completionTimeoutSec, DEFAULT_QUEUE_SETTINGS.completionTimeoutSec, { min: 5, max: 600, integer: true })
+  }
+}
+
 function loadBotSettings() {
   try {
     const raw = fs.readFileSync(SETTINGS_FILE, 'utf8')
@@ -104,6 +123,7 @@ function loadBotSettings() {
       viewerEnabled: typeof parsed.viewerEnabled === 'boolean' ? parsed.viewerEnabled : DEFAULT_BOT_SETTINGS.viewerEnabled,
       viewerTargetBotId: String(parsed.viewerTargetBotId || STARTER_BOT_ID),
       commandSettings: normalizeCommandSettings(parsed.commandSettings),
+      queueSettings: normalizeQueueSettings(parsed.queueSettings),
       bots: safeArray(parsed.bots)
         .map((bot) => ({
           id: String(bot.id || ''),
@@ -140,6 +160,7 @@ function saveBotSettings(settings) {
     viewerEnabled: typeof settings.viewerEnabled === 'boolean' ? settings.viewerEnabled : DEFAULT_BOT_SETTINGS.viewerEnabled,
     viewerTargetBotId: String(settings.viewerTargetBotId || STARTER_BOT_ID),
     commandSettings: normalizeCommandSettings(settings.commandSettings),
+    queueSettings: normalizeQueueSettings(settings.queueSettings),
     bots: safeArray(settings.bots)
       .map((bot) => ({
         id: String(bot.id || ''),
@@ -167,6 +188,7 @@ let io = null
 let lastStateSignature = ''
 let viewerEnabled = Boolean(botSettings.viewerEnabled)
 let viewerAttachedBotId = null
+const queueByTarget = new Map()
 
 const HOSTILE_ENTITY_NAMES = new Set([
   'zombie',
@@ -257,8 +279,239 @@ function getDashboardState() {
     viewerActiveBotId: viewerAttachedBotId,
     viewerUrl: getViewerUrl(),
     bots: getBotsState(),
-    groups: botSettings.groups
+    groups: botSettings.groups,
+    queueSettings: normalizeQueueSettings(botSettings.queueSettings)
   }
+}
+
+function makeQueueStepId() {
+  return `step-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function isWaitableQueueCommand(command) {
+  const normalized = normalizeCommand(command)
+  if (!normalized) return false
+  return normalized.startsWith('Bot.goto ') || normalized === 'Bot.goto.nearest'
+}
+
+function normalizeQueueStep(stepInput) {
+  const step = stepInput || {}
+  const type = String(step.type || '').toLowerCase()
+  const id = String(step.id || makeQueueStepId())
+
+  if (type === 'wait') {
+    const seconds = normalizeNumber(step.seconds, 1, { min: 1, max: 3600 })
+    return { id, type: 'wait', seconds }
+  }
+
+  if (type === 'command') {
+    const command = normalizeCommand(step.command)
+    if (!command) throw new Error('Queue command step is missing command text')
+
+    const waitForCompletion = Boolean(step.waitForCompletion)
+    if (waitForCompletion && !isWaitableQueueCommand(command)) {
+      throw new Error('This command cannot wait for completion. Only Bot.goto variants are supported.')
+    }
+
+    return { id, type: 'command', command, waitForCompletion }
+  }
+
+  throw new Error('Queue step type must be "command" or "wait"')
+}
+
+function getQueueDefaultSettings() {
+  return normalizeQueueSettings(botSettings.queueSettings)
+}
+
+function ensureTargetQueue(target) {
+  const targetKey = String(target || STARTER_BOT_ID)
+  let queue = queueByTarget.get(targetKey)
+
+  if (!queue) {
+    queue = {
+      target: targetKey,
+      steps: [],
+      running: false,
+      stopRequested: false,
+      currentStepIndex: -1,
+      settings: getQueueDefaultSettings(),
+      perBot: {},
+      lastError: null
+    }
+    queueByTarget.set(targetKey, queue)
+  }
+
+  return queue
+}
+
+function serializeTargetQueue(queue) {
+  return {
+    target: queue.target,
+    steps: queue.steps,
+    running: queue.running,
+    stopRequested: queue.stopRequested,
+    currentStepIndex: queue.currentStepIndex,
+    settings: queue.settings,
+    perBot: queue.perBot,
+    lastError: queue.lastError
+  }
+}
+
+function emitQueueState(target) {
+  if (!io) return
+  const queue = ensureTargetQueue(target)
+  io.emit('queue_state', { target: queue.target, queue: serializeTargetQueue(queue) })
+}
+
+async function waitMsWithStop(ms, shouldStop) {
+  const started = Date.now()
+
+  while (Date.now() - started < ms) {
+    if (shouldStop()) {
+      throw new Error('Queue stopped')
+    }
+
+    const remaining = ms - (Date.now() - started)
+    const chunk = Math.max(10, Math.min(250, remaining))
+    await new Promise((resolve) => setTimeout(resolve, chunk))
+  }
+}
+
+async function runQueueForBot({ queue, botId, username }) {
+  queue.perBot[botId] = {
+    status: 'running',
+    stepIndex: 0,
+    error: null,
+    retries: 0
+  }
+  emitQueueState(queue.target)
+
+  for (let stepIndex = 0; stepIndex < queue.steps.length; stepIndex += 1) {
+    if (queue.stopRequested) {
+      queue.perBot[botId] = {
+        ...queue.perBot[botId],
+        status: 'stopped',
+        stepIndex,
+        error: 'Queue stopped'
+      }
+      emitQueueState(queue.target)
+      return
+    }
+
+    queue.currentStepIndex = stepIndex
+    queue.perBot[botId] = {
+      ...queue.perBot[botId],
+      status: 'running',
+      stepIndex,
+      error: null,
+      retries: 0
+    }
+    emitQueueState(queue.target)
+
+    const step = queue.steps[stepIndex]
+    let attempt = 0
+
+    while (true) {
+      try {
+        if (step.type === 'wait') {
+          await waitMsWithStop(step.seconds * 1000, () => queue.stopRequested)
+        } else {
+          const runtime = runtimes.get(botId)
+          if (!runtime) throw new Error(`Bot ${botId} is not available`)
+
+          await runtime.runQueueCommand({
+            username,
+            command: step.command,
+            waitForCompletion: step.waitForCompletion,
+            timeoutMs: queue.settings.completionTimeoutSec * 1000,
+            shouldStop: () => queue.stopRequested
+          })
+        }
+        break
+      } catch (error) {
+        const message = error?.message || String(error)
+        attempt += 1
+
+        if (queue.settings.onFailure === 'retry' && attempt <= queue.settings.retryCount) {
+          queue.perBot[botId] = {
+            ...queue.perBot[botId],
+            retries: attempt,
+            error: message
+          }
+          emitQueueState(queue.target)
+          await waitMsWithStop(1000, () => queue.stopRequested)
+          continue
+        }
+
+        if (queue.settings.onFailure === 'skip') {
+          queue.perBot[botId] = {
+            ...queue.perBot[botId],
+            status: 'running',
+            error: `Skipped: ${message}`,
+            retries: attempt
+          }
+          emitQueueState(queue.target)
+          break
+        }
+
+        queue.perBot[botId] = {
+          ...queue.perBot[botId],
+          status: 'failed',
+          error: message,
+          retries: attempt
+        }
+        queue.lastError = `Bot ${botId}: ${message}`
+        queue.stopRequested = true
+        emitQueueState(queue.target)
+        return
+      }
+    }
+  }
+
+  if (queue.perBot[botId]?.status !== 'failed' && queue.perBot[botId]?.status !== 'stopped') {
+    queue.perBot[botId] = {
+      ...queue.perBot[botId],
+      status: 'completed',
+      stepIndex: queue.steps.length - 1,
+      error: null
+    }
+  }
+  emitQueueState(queue.target)
+}
+
+async function startTargetQueue({ target, username = 'WebUI' }) {
+  const queue = ensureTargetQueue(target)
+  if (queue.running) throw new Error('Queue is already running for this target')
+  if (!queue.steps.length) throw new Error('Queue is empty')
+
+  const targetIds = resolveTargetBotIds(queue.target)
+  if (!targetIds.length) throw new Error('No bots resolved for target')
+
+  queue.running = true
+  queue.stopRequested = false
+  queue.currentStepIndex = 0
+  queue.lastError = null
+  queue.perBot = {}
+  emitQueueState(queue.target)
+
+  pushWebLog('command', `${username} started queue [target=${queue.target}]`)
+
+  try {
+    await Promise.all(targetIds.map((botId) => runQueueForBot({ queue, botId, username })))
+  } finally {
+    queue.running = false
+    queue.stopRequested = false
+    queue.currentStepIndex = -1
+    emitQueueState(queue.target)
+  }
+
+  return { targetIds }
+}
+
+function stopTargetQueue(target) {
+  const queue = ensureTargetQueue(target)
+  queue.stopRequested = true
+  emitQueueState(queue.target)
 }
 
 function broadcastState(force = false) {
@@ -454,6 +707,7 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
     setSelfDefense,
     setAutoEat,
     setSilent,
+    runQueueCommand,
     async shutdown() {
       miningEnabled = false
       guardPos = null
@@ -608,6 +862,66 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
 
   function waitMs(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  async function waitForQueueGotoCompletion(command, timeoutMs = 60000, shouldStop = () => false) {
+    const normalized = normalizeCommand(command)
+    const commandSettings = getCommandSettings()
+    const started = Date.now()
+
+    const parseCoordinateGoal = () => {
+      if (!normalized.startsWith('Bot.goto ')) return null
+      const args = normalized.slice(9).trim().split(' ').filter(Boolean)
+      if (args.length !== 3) return null
+      const xyz = args.map(Number)
+      if (xyz.some((value) => Number.isNaN(value))) return null
+      return { x: xyz[0], y: xyz[1], z: xyz[2], range: commandSettings.rangeGoal }
+    }
+
+    const coordinateGoal = parseCoordinateGoal()
+
+    while (Date.now() - started < timeoutMs) {
+      if (shouldStop()) {
+        throw new Error('Queue stopped')
+      }
+
+      if (!bot.entity?.position) {
+        await waitMs(150)
+        continue
+      }
+
+      if (coordinateGoal) {
+        const distance = bot.entity.position.distanceTo(coordinateGoal)
+        if (distance <= coordinateGoal.range + 0.2) return
+      } else {
+        const followMeta = trackedGoalState.meta?.type === 'follow' ? trackedGoalState.meta : null
+        const targetFromName = followMeta?.username ? bot.players[followMeta.username]?.entity : null
+        const targetEntity = targetFromName || followMeta?.entity || null
+        if (targetEntity?.position) {
+          const range = typeof followMeta?.range === 'number' ? followMeta.range : commandSettings.rangeGoal
+          if (bot.entity.position.distanceTo(targetEntity.position) <= range + 0.4) return
+        }
+      }
+
+      await waitMs(150)
+    }
+
+    throw new Error(`Timed out waiting for completion of ${normalized}`)
+  }
+
+  async function runQueueCommand({ username = 'WebUI', command, waitForCompletion = false, timeoutMs = 60000, shouldStop = () => false }) {
+    const normalized = normalizeCommand(command)
+    if (!normalized) throw new Error('Missing command')
+
+    if (waitForCompletion && !isWaitableQueueCommand(normalized)) {
+      throw new Error('This command cannot wait for completion')
+    }
+
+    processCommand(username, normalized)
+
+    if (waitForCompletion) {
+      await waitForQueueGotoCompletion(normalized, timeoutMs, shouldStop)
+    }
   }
 
   async function equipBestSword(options = {}) {
@@ -1380,6 +1694,9 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
 
 function addRuntime(runtime) {
   runtimes.set(runtime.id, runtime)
+  for (const queue of queueByTarget.values()) {
+    emitQueueState(queue.target)
+  }
   broadcastState(true)
 }
 
@@ -1403,6 +1720,9 @@ async function removeRuntime(botId) {
   }
 
   saveBotSettings(botSettings)
+  for (const queue of queueByTarget.values()) {
+    emitQueueState(queue.target)
+  }
   broadcastState(true)
 }
 
@@ -1506,7 +1826,8 @@ function startWebServer() {
       starterAuth: normalizeAuth(req.body?.starterAuth ?? botSettings.starterAuth),
       starterToken: String(req.body?.starterToken ?? botSettings.starterToken),
       viewerTargetBotId: String(req.body?.viewerTargetBotId || botSettings.viewerTargetBotId),
-      commandSettings: nextCommandSettings
+      commandSettings: nextCommandSettings,
+      queueSettings: normalizeQueueSettings(req.body?.queueSettings ?? botSettings.queueSettings)
     }
 
     if (!runtimes.has(nextSettings.viewerTargetBotId)) {
@@ -1696,6 +2017,129 @@ function startWebServer() {
     }
   })
 
+  app.get('/api/queue', (req, res) => {
+    try {
+      const target = String(req.query?.target || STARTER_BOT_ID)
+      const queue = ensureTargetQueue(target)
+      return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/step', (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Cannot edit queue while running')
+
+      const step = normalizeQueueStep(req.body?.step)
+      queue.steps.push(step)
+      emitQueueState(target)
+      return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.put('/api/queue/steps', (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Cannot reorder queue while running')
+
+      const orderedIds = safeArray(req.body?.stepIds).map((id) => String(id))
+      const known = new Map(queue.steps.map((step) => [step.id, step]))
+      if (orderedIds.length !== queue.steps.length) {
+        throw new Error('Invalid step order payload')
+      }
+
+      const reordered = []
+      for (const stepId of orderedIds) {
+        const step = known.get(stepId)
+        if (!step) throw new Error('Step order includes unknown id')
+        reordered.push(step)
+      }
+
+      queue.steps = reordered
+      emitQueueState(target)
+      return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.delete('/api/queue/steps/:stepId', (req, res) => {
+    try {
+      const target = String(req.query?.target || STARTER_BOT_ID)
+      const stepId = String(req.params.stepId)
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Cannot edit queue while running')
+
+      const before = queue.steps.length
+      queue.steps = queue.steps.filter((step) => step.id !== stepId)
+      if (before === queue.steps.length) {
+        return res.status(404).json({ ok: false, error: 'Step not found' })
+      }
+
+      emitQueueState(target)
+      return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/clear', (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Cannot clear queue while running')
+      queue.steps = []
+      queue.lastError = null
+      queue.currentStepIndex = -1
+      queue.perBot = {}
+      emitQueueState(target)
+      return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/settings', (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Cannot update queue settings while running')
+
+      queue.settings = normalizeQueueSettings(req.body?.settings)
+      emitQueueState(target)
+      return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/start', async (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const username = String(req.body?.username || 'WebUI')
+      const result = await startTargetQueue({ target, username })
+      return res.json({ ok: true, ...result })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/stop', (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      stopTargetQueue(target)
+      return res.json({ ok: true })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
   app.post('/api/toggle/:name', (req, res) => {
     const toggleName = String(req.params.name)
 
@@ -1767,6 +2211,10 @@ function startWebServer() {
       settings: { ...botSettings, viewerEnabled },
       logs: webLogs
     })
+
+    for (const queue of queueByTarget.values()) {
+      socket.emit('queue_state', { target: queue.target, queue: serializeTargetQueue(queue) })
+    }
   })
 
   server.listen(botSettings.webPort, () => {
