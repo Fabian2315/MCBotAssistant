@@ -280,6 +280,60 @@ button,
   min-height: 70vh;
 }
 
+.commands-card {
+  min-height: 70vh;
+}
+
+.commands-grid {
+  margin-top: 0.9rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.command-group {
+  background: #fff;
+  border: 1px solid #d9d2c2;
+  border-radius: 0.8rem;
+  padding: 0.8rem;
+}
+
+.command-group h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.command-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.command-list li {
+  display: grid;
+  gap: 0.15rem;
+  border-bottom: 1px dashed #e3ddcf;
+  padding-bottom: 0.35rem;
+}
+
+.command-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.command-list code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.84rem;
+  color: #1f2a2d;
+}
+
+.command-list span {
+  font-size: 0.88rem;
+  color: #5f5a4d;
+}
+
 .viewer-head {
   display: flex;
   justify-content: space-between;
@@ -494,6 +548,10 @@ button,
   }
 
   .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .commands-grid {
     grid-template-columns: 1fr;
   }
 

@@ -9,13 +9,6 @@
   "starterToken": "",
   "viewerEnabled": false,
   "viewerTargetBotId": "starter",
-  "bots": [
-    {
-      "id": "bot2",
-      "username": "Bot2",
-      "auth": "offline",
-      "token": ""
-    }
-  ],
+  "bots": [],
   "groups": []
 }

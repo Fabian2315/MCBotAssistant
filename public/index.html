@@ -51,6 +51,7 @@
       <section class="content">
         <nav class="tab-bar">
           <button class="tab active" data-tab="controls">Controls</button>
+          <button class="tab" data-tab="commands">Command Overview</button>
           <button class="tab" data-tab="viewer">Prismarine Viewer</button>
           <button class="tab" data-tab="settings">Settings</button>
           <button class="tab" data-tab="logs">Logs</button>
@@ -143,6 +144,66 @@
             </div>
             <p id="viewerNotice" class="muted viewer-notice"></p>
             <iframe id="viewerFrame" title="Prismarine Viewer" src="http://localhost:3008"></iframe>
+          </article>
+        </section>
+
+        <section class="tab-panel" id="commands">
+          <article class="card commands-card">
+            <h2>Command Overview</h2>
+            <p class="muted">All supported commands. You can run them in chat or from the command bar in Controls. If you skip <strong>Bot.</strong>, the dashboard adds it automatically.</p>
+
+            <div class="commands-grid">
+              <section class="command-group">
+                <h3>Basics + Navigation</h3>
+                <ul class="command-list">
+                  <li><code>Bot.test</code><span>Quick health check response.</span></li>
+                  <li><code>Bot.come</code><span>Bot moves to the player who sent the command.</span></li>
+                  <li><code>Bot.goto &lt;player&gt;</code><span>Pathfind to a visible player and keep tracking them.</span></li>
+                  <li><code>Bot.goto &lt;x&gt; &lt;y&gt; &lt;z&gt;</code><span>Pathfind to exact coordinates.</span></li>
+                  <li><code>Bot.goto.nearest</code><span>Go to the nearest player found.</span></li>
+                  <li><code>Bot.follow &lt;player&gt;</code><span>Continuously follow a visible player.</span></li>
+                  <li><code>Bot.follow.stop</code><span>Stop any active follow behavior.</span></li>
+                </ul>
+              </section>
+
+              <section class="command-group">
+                <h3>Combat + Guard</h3>
+                <ul class="command-list">
+                  <li><code>Bot.attack &lt;player&gt;</code><span>Attack a visible player target.</span></li>
+                  <li><code>Bot.pvp.stop</code><span>Stop current PvP attack actions.</span></li>
+                  <li><code>Bot.guard &lt;x&gt; &lt;y&gt; &lt;z&gt;</code><span>Guard a specific coordinate area.</span></li>
+                  <li><code>Bot.guard.here</code><span>Guard the bot's current position.</span></li>
+                  <li><code>Bot.guard.stop</code><span>Disable guard mode.</span></li>
+                  <li><code>Bot.selfdefense</code><span>Toggle automatic self-defense on damage.</span></li>
+                  <li><code>Bot.selfdefense.on</code><span>Enable self-defense.</span></li>
+                  <li><code>Bot.selfdefense.off</code><span>Disable self-defense.</span></li>
+                  <li><code>Bot.selfdefense.status</code><span>Show whether self-defense is enabled.</span></li>
+                </ul>
+              </section>
+
+              <section class="command-group">
+                <h3>Mining + Resources</h3>
+                <ul class="command-list">
+                  <li><code>Bot.collect &lt;blockType&gt; &lt;count&gt;</code><span>Collect a block type a fixed number of times.</span></li>
+                  <li><code>Bot.mine &lt;blockType&gt;</code><span>Start continuous mining loop for one block type.</span></li>
+                  <li><code>Bot.miner.stop</code><span>Stop the active mining loop.</span></li>
+                  <li><code>Bot.empty</code><span>Move to a nearby chest and deposit inventory.</span></li>
+                </ul>
+              </section>
+
+              <section class="command-group">
+                <h3>Food + Chat Behavior</h3>
+                <ul class="command-list">
+                  <li><code>Bot.autoEat</code><span>Enable auto-eat behavior.</span></li>
+                  <li><code>Bot.autoEat.stop</code><span>Disable auto-eat behavior.</span></li>
+                  <li><code>Bot.eat</code><span>Force one immediate eat attempt.</span></li>
+                  <li><code>Bot.silent</code><span>Toggle silent mode for bot chat output.</span></li>
+                  <li><code>Bot.silent.on</code><span>Enable silent mode.</span></li>
+                  <li><code>Bot.silent.off</code><span>Disable silent mode.</span></li>
+                  <li><code>Bot.silent.status</code><span>Show whether silent mode is enabled.</span></li>
+                </ul>
+              </section>
+            </div>
           </article>
         </section>
 
