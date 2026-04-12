@@ -41,6 +41,38 @@ const DEFAULT_QUEUE_SETTINGS = {
   completionTimeoutSec: 60
 }
 
+const COMMAND_AUTOCOMPLETE = [
+  'Bot.test',
+  'Bot.come',
+  'Bot.goto <player>',
+  'Bot.goto <x> <y> <z>',
+  'Bot.goto.nearest',
+  'Bot.follow <player>',
+  'Bot.follow.stop',
+  'Bot.attack <player>',
+  'Bot.pvp.stop',
+  'Bot.guard <x> <y> <z>',
+  'Bot.guard.here',
+  'Bot.guard.stop',
+  'Bot.selfdefense',
+  'Bot.selfdefense.on',
+  'Bot.selfdefense.off',
+  'Bot.selfdefense.status',
+  'Bot.silent',
+  'Bot.silent.on',
+  'Bot.silent.off',
+  'Bot.silent.status',
+  'Bot.collect <blockType> <count>',
+  'Bot.mine <blockType>',
+  'Bot.miner.stop',
+  'Bot.craft <itemId> [count]',
+  'Bot.smelt <itemId> [count] [station]',
+  'Bot.autoEat',
+  'Bot.autoEat.stop',
+  'Bot.eat',
+  'Bot.empty'
+]
+
 const DEFAULT_BOT_SETTINGS = {
   host: 'localhost',
   port: 25565,
@@ -189,6 +221,7 @@ function saveBotSettings(settings) {
 }
 
 const botSettings = loadBotSettings()
+let autocompleteItems = buildAutocompleteItems(botSettings.version)
 const runtimes = new Map()
 const webLogs = []
 let io = null
@@ -270,6 +303,16 @@ function normalizeCommand(input) {
   return raw.startsWith('Bot.') ? raw : `Bot.${raw}`
 }
 
+function buildAutocompleteItems(version) {
+  try {
+    const mcDataForVersion = require('minecraft-data')(version)
+    const names = Object.keys(mcDataForVersion.itemsByName || {})
+    return names.sort((left, right) => left.localeCompare(right))
+  } catch {
+    return []
+  }
+}
+
 function getViewerUrl() {
   return `http://localhost:${botSettings.viewerPort}`
 }
@@ -300,7 +343,7 @@ function makeQueueStepId() {
 function isWaitableQueueCommand(command) {
   const normalized = normalizeCommand(command)
   if (!normalized) return false
-  return normalized.startsWith('Bot.goto ') || normalized === 'Bot.goto.nearest' || normalized.startsWith('Bot.craft ')
+  return normalized.startsWith('Bot.goto ') || normalized === 'Bot.goto.nearest' || normalized.startsWith('Bot.craft ') || normalized.startsWith('Bot.smelt ')
 }
 
 function normalizeQueueStep(stepInput) {
@@ -319,7 +362,7 @@ function normalizeQueueStep(stepInput) {
 
     const waitForCompletion = Boolean(step.waitForCompletion)
     if (waitForCompletion && !isWaitableQueueCommand(command)) {
-      throw new Error('This command cannot wait for completion. Only Bot.goto variants and Bot.craft are supported.')
+      throw new Error('This command cannot wait for completion. Only Bot.goto variants, Bot.craft, and Bot.smelt are supported.')
     }
 
     return { id, type: 'command', command, waitForCompletion }
@@ -1077,6 +1120,182 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
     })
   }
 
+  function findNearbyStationBlock(stationType) {
+    const stationKey = String(stationType || 'any').toLowerCase()
+    const blockNames = recipeRegistry.FURNACE_BLOCKS_BY_STATION[stationKey] || recipeRegistry.FURNACE_BLOCKS_BY_STATION.any
+    return bot.findBlock({
+      matching: (block) => block && blockNames.includes(block.name),
+      maxDistance: getCommandSettings().craftSearchRadius
+    })
+  }
+
+  function resolveFurnaceStationName(stationValue) {
+    const normalized = String(stationValue || 'auto').trim().toLowerCase()
+    if (['auto', 'any'].includes(normalized)) return 'any'
+    if (normalized === 'blast' || normalized === 'blastfurnace') return 'blast_furnace'
+    if (normalized === 'smoker') return 'smoker'
+    if (normalized === 'furnace') return 'furnace'
+    throw new Error('Station must be one of: auto, furnace, smoker, blast_furnace')
+  }
+
+  function selectSmeltEntry(entries, requestedCount, forcedStation) {
+    const candidates = entries
+      .map((entry) => {
+        const inputData = mcData.itemsByName[entry.input]
+        if (!inputData) return null
+
+        const station = forcedStation === 'any' ? entry.station : forcedStation
+        const available = countInventoryItem(inputData.id)
+        const missing = Math.max(0, requestedCount - available)
+
+        return {
+          ...entry,
+          inputData,
+          station,
+          available,
+          missing,
+          outputCount: Math.max(1, Number(entry.outputCount) || 1)
+        }
+      })
+      .filter(Boolean)
+
+    if (!candidates.length) return null
+
+    return candidates.sort((left, right) => {
+      if (left.missing === 0 && right.missing > 0) return -1
+      if (right.missing === 0 && left.missing > 0) return 1
+      if (left.missing !== right.missing) return left.missing - right.missing
+      return right.available - left.available
+    })[0]
+  }
+
+  function planSmelt(outputItemName, requestedCount, stationPreference = 'auto') {
+    const target = resolveCraftTarget(outputItemName)
+    const forcedStation = resolveFurnaceStationName(stationPreference)
+    const entries = recipeRegistry.FURNACE_RECIPES_BY_OUTPUT[target.normalizedName] || []
+
+    if (!entries.length) {
+      throw new Error(`No furnace recipe registered for ${target.normalizedName}`)
+    }
+
+    const selected = selectSmeltEntry(entries, requestedCount, forcedStation)
+    if (!selected) {
+      throw new Error(`No usable furnace recipe registered for ${target.normalizedName}`)
+    }
+
+    return {
+      target,
+      station: selected.station || 'furnace',
+      inputData: selected.inputData,
+      outputData: target.itemData,
+      outputCount: selected.outputCount,
+      smeltRuns: Math.max(1, Math.ceil(requestedCount / selected.outputCount)),
+      requestedCount,
+      availableInput: selected.available,
+      missingInput: selected.missing
+    }
+  }
+
+  function chooseFuelForRuns(runs) {
+    const requiredTicks = runs * 200
+    const fuels = Object.entries(recipeRegistry.FUEL_TICKS_BY_ITEM)
+      .map(([itemName, burnTicks]) => {
+        const itemData = mcData.itemsByName[itemName]
+        if (!itemData) return null
+
+        const available = countInventoryItem(itemData.id)
+        if (available <= 0) return null
+
+        const neededCount = Math.max(1, Math.ceil(requiredTicks / burnTicks))
+        const enough = available >= neededCount
+
+        return {
+          itemName,
+          itemData,
+          burnTicks,
+          available,
+          neededCount,
+          enough
+        }
+      })
+      .filter(Boolean)
+
+    if (!fuels.length) return null
+
+    const enoughFuel = fuels.filter((fuel) => fuel.enough)
+    if (enoughFuel.length) {
+      return enoughFuel.sort((left, right) => left.neededCount - right.neededCount)[0]
+    }
+
+    return fuels.sort((left, right) => right.available * right.burnTicks - left.available * left.burnTicks)[0]
+  }
+
+  async function collectFurnaceOutputUntil({ furnace, outputType, targetCount, timeoutMs }) {
+    const started = Date.now()
+    let collected = 0
+
+    while (collected < targetCount && Date.now() - started < timeoutMs) {
+      const output = furnace.outputItem()
+      if (output && output.type === outputType && output.count > 0) {
+        const taken = await furnace.takeOutput()
+        if (taken?.type === outputType) {
+          collected += taken.count || 0
+        }
+        continue
+      }
+
+      await waitMs(250)
+    }
+
+    return collected
+  }
+
+  async function handleSmeltCommand(itemName, requestedCount, stationPreference = 'auto') {
+    if (!bot.player || !bot.entity) {
+      throw new Error('Bot must be connected before it can smelt')
+    }
+
+    const plan = planSmelt(itemName, requestedCount, stationPreference)
+    if (plan.missingInput > 0) {
+      throw new Error(`Missing materials for ${plan.target.label}: ${getItemLabel(plan.inputData.id)} ${plan.availableInput}/${plan.smeltRuns}`)
+    }
+
+    const stationBlock = findNearbyStationBlock(plan.station)
+    if (!stationBlock) {
+      throw new Error(`No ${plan.station.replace(/_/g, ' ')} found within ${getCommandSettings().craftSearchRadius} blocks`)
+    }
+
+    await moveNearBlock(stationBlock, 1)
+
+    const fuel = chooseFuelForRuns(plan.smeltRuns)
+    if (!fuel) {
+      throw new Error('No furnace fuel found in inventory')
+    }
+
+    const furnace = await bot.openFurnace(stationBlock)
+    try {
+      await furnace.putInput(plan.inputData.id, null, plan.smeltRuns)
+
+      const fuelCount = Math.min(fuel.available, Math.max(1, fuel.neededCount))
+      await furnace.putFuel(fuel.itemData.id, null, fuelCount)
+
+      const collected = await collectFurnaceOutputUntil({
+        furnace,
+        outputType: plan.outputData.id,
+        targetCount: requestedCount,
+        timeoutMs: Math.max(20000, plan.smeltRuns * 12000)
+      })
+
+      if (collected < requestedCount) {
+        throw new Error(`Smelting timed out after collecting ${collected}/${requestedCount}`)
+      }
+
+      say(`SUCCESS: Smelted ${collected} ${plan.target.label} using ${stationBlock.name.replace(/_/g, ' ')}`)
+    } finally {
+      furnace.close()
+    }
+  }
+
   async function handleCraftCommand(itemName, requestedCount) {
     if (!bot.player || !bot.entity) {
       throw new Error('Bot must be connected before it can craft')
@@ -1308,6 +1527,25 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
           await handleCraftCommand(itemName, count)
           break
         }
+        case message === 'Bot.smelt':
+          throw new Error('Usage: Bot.smelt <itemId> [count] [station]')
+        case message.startsWith('Bot.smelt '): {
+          const args = message.slice(10).trim().split(' ').filter(Boolean)
+          if (args.length < 1 || args.length > 3) {
+            throw new Error('Usage: Bot.smelt <itemId> [count] [station]')
+          }
+
+          const itemName = args[0]
+          const count = args.length >= 2 ? Number(args[1]) : 1
+          const station = args.length >= 3 ? args[2] : 'auto'
+
+          if (!Number.isInteger(count) || count <= 0) {
+            throw new Error('Smelt count must be a positive integer')
+          }
+
+          await handleSmeltCommand(itemName, count, station)
+          break
+        }
         case message === 'Bot.autoEat':
           setAutoEat(true)
           break
@@ -1399,7 +1637,7 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
       throw new Error('This command cannot wait for completion')
     }
 
-    if (waitForCompletion && normalized.startsWith('Bot.craft')) {
+    if (waitForCompletion && (normalized.startsWith('Bot.craft') || normalized.startsWith('Bot.smelt'))) {
       await Promise.race([
         executeCommand(username, normalized),
         waitForQueueAsyncCompletion(normalized, timeoutMs, shouldStop)
@@ -2101,6 +2339,14 @@ function startWebServer() {
     res.json({ ...botSettings, viewerEnabled, tpsDashboardEnabled })
   })
 
+  app.get('/api/autocomplete', (req, res) => {
+    res.json({
+      ok: true,
+      commands: COMMAND_AUTOCOMPLETE,
+      items: autocompleteItems
+    })
+  })
+
   app.post('/api/settings', (req, res) => {
     const nextCommandSettings = normalizeCommandSettings(req.body?.commandSettings ?? botSettings.commandSettings)
     const nextSettings = {
@@ -2126,7 +2372,11 @@ function startWebServer() {
       return res.status(400).json({ ok: false, error: 'Viewer target bot does not exist' })
     }
 
+    const previousVersion = botSettings.version
     Object.assign(botSettings, nextSettings)
+    if (nextSettings.version !== previousVersion) {
+      autocompleteItems = buildAutocompleteItems(nextSettings.version)
+    }
     tpsDashboardEnabled = Boolean(nextSettings.tpsDashboardEnabled)
     saveBotSettings(botSettings)
 

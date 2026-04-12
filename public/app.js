@@ -6,6 +6,7 @@ const groupList = document.getElementById('groupList')
 const commandTarget = document.getElementById('commandTarget')
 const commandForm = document.getElementById('commandForm')
 const commandInput = document.getElementById('commandInput')
+const commandAutocompleteList = document.getElementById('commandAutocompleteList')
 const craftForm = document.getElementById('craftForm')
 const craftItemInput = document.getElementById('craftItemInput')
 const craftCountInput = document.getElementById('craftCountInput')
@@ -97,6 +98,9 @@ let selectedQueue = {
   perBot: {},
   lastError: null
 }
+let autocompleteCommands = []
+let autocompleteItems = []
+let activeAutocompleteOptions = []
 
 function clampToPercent(value, max) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 0
@@ -168,6 +172,90 @@ async function putJson(url, body = {}) {
   }
 
   return response.json()
+}
+
+async function loadAutocompleteData() {
+  try {
+    const result = await getJson('/api/autocomplete')
+    autocompleteCommands = Array.isArray(result.commands) ? result.commands : []
+    autocompleteItems = Array.isArray(result.items) ? result.items : []
+    updateAutocompleteSuggestions(commandInput)
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+}
+
+function commandAutocompleteContext(value) {
+  const raw = String(value || '')
+  const trimmed = raw.trim()
+  if (!trimmed) return { mode: 'commands', query: '', prefix: '' }
+
+  const hasTrailingSpace = /\s$/.test(raw)
+  const tokens = trimmed.split(/\s+/)
+  const firstRaw = (tokens[0] || '').toLowerCase()
+  const first = firstRaw.startsWith('bot.') ? firstRaw : `bot.${firstRaw}`
+  const craftLike = first === 'bot.craft' || first === 'bot.smelt'
+
+  if (!craftLike) {
+    if (tokens.length === 1 && !hasTrailingSpace) {
+      return { mode: 'commands', query: tokens[0], prefix: '' }
+    }
+    return { mode: 'none', query: '', prefix: '' }
+  }
+
+  const argumentIndex = hasTrailingSpace ? tokens.length : tokens.length - 1
+  if (argumentIndex <= 1) {
+    const commandToken = tokens[0] || ''
+    const prefix = `${commandToken} `
+    return { mode: 'items', query: tokens[1] || '', prefix }
+  }
+
+  return { mode: 'none', query: '', prefix: '' }
+}
+
+function setAutocompleteOptions(options) {
+  if (!commandAutocompleteList) return
+  commandAutocompleteList.innerHTML = ''
+  activeAutocompleteOptions = options.slice(0, 80)
+
+  activeAutocompleteOptions.forEach((value) => {
+    const option = document.createElement('option')
+    option.value = value
+    commandAutocompleteList.appendChild(option)
+  })
+}
+
+function updateAutocompleteSuggestions(inputElement) {
+  const context = commandAutocompleteContext(inputElement.value)
+  if (context.mode === 'none') {
+    setAutocompleteOptions([])
+    return
+  }
+
+  const pool = context.mode === 'items' ? autocompleteItems : autocompleteCommands
+  const query = String(context.query || '').trim().toLowerCase()
+
+  const matches = !query
+    ? pool
+    : pool.filter((entry) => String(entry).toLowerCase().startsWith(query))
+
+  const options = context.mode === 'items'
+    ? matches.map((itemId) => `${context.prefix}${itemId}`)
+    : matches
+
+  setAutocompleteOptions(options)
+}
+
+function maybeApplyAutocomplete(inputElement, event) {
+  if (event.key !== 'Tab') return
+  if (!activeAutocompleteOptions.length) return
+
+  const candidate = activeAutocompleteOptions[0]
+  if (!candidate) return
+
+  event.preventDefault()
+  inputElement.value = candidate
+  updateAutocompleteSuggestions(inputElement)
 }
 
 function renderBots() {
@@ -445,7 +533,7 @@ function queueIsCommandWaitable(command) {
   const text = String(command || '').trim()
   if (!text) return false
   const normalized = text.startsWith('Bot.') ? text : `Bot.${text}`
-  return normalized.startsWith('Bot.goto ') || normalized === 'Bot.goto.nearest' || normalized.startsWith('Bot.craft ')
+  return normalized.startsWith('Bot.goto ') || normalized === 'Bot.goto.nearest' || normalized.startsWith('Bot.craft ') || normalized.startsWith('Bot.smelt ')
 }
 
 function renderQueueControls() {
@@ -460,7 +548,7 @@ function renderQueueControls() {
   queueWaitCompletionInput.disabled = !canWait
   if (!canWait) {
     queueWaitCompletionInput.checked = false
-    queueWaitCompletionRow.title = 'Wait for completion is only available for Bot.goto variants and Bot.craft'
+    queueWaitCompletionRow.title = 'Wait for completion is only available for Bot.goto variants, Bot.craft, and Bot.smelt'
   } else {
     queueWaitCompletionRow.title = ''
   }
@@ -657,7 +745,28 @@ queueStepType.addEventListener('change', () => {
 })
 
 queueCommandInput.addEventListener('input', () => {
+  updateAutocompleteSuggestions(queueCommandInput)
   renderQueueControls()
+})
+
+commandInput.addEventListener('input', () => {
+  updateAutocompleteSuggestions(commandInput)
+})
+
+commandInput.addEventListener('focus', () => {
+  updateAutocompleteSuggestions(commandInput)
+})
+
+commandInput.addEventListener('keydown', (event) => {
+  maybeApplyAutocomplete(commandInput, event)
+})
+
+queueCommandInput.addEventListener('focus', () => {
+  updateAutocompleteSuggestions(queueCommandInput)
+})
+
+queueCommandInput.addEventListener('keydown', (event) => {
+  maybeApplyAutocomplete(queueCommandInput, event)
 })
 
 document.querySelectorAll('.tab').forEach((button) => {
@@ -912,6 +1021,7 @@ socket.on('bootstrap', ({ state, settings, logs }) => {
   renderAll()
   renderQueueControls()
   loadSelectedQueue()
+  loadAutocompleteData()
 })
 
 socket.on('state', (state) => {

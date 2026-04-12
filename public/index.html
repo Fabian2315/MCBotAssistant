@@ -66,9 +66,10 @@
               </label>
             </div>
             <form id="commandForm" class="command-form">
-              <input id="commandInput" type="text" placeholder="Examples: goto Steve | Bot.guard.here | craft wooden_pickaxe 1" autocomplete="off">
+              <input id="commandInput" type="text" list="commandAutocompleteList" placeholder="Examples: goto Steve | Bot.guard.here | craft wooden_pickaxe 1 | smelt iron_ingot 8" autocomplete="off">
               <button type="submit">Send</button>
             </form>
+            <datalist id="commandAutocompleteList"></datalist>
           </article>
 
           <div class="panel-grid">
@@ -155,7 +156,7 @@
           <div class="panel-grid queue-grid">
             <article class="card">
               <h2>Add Queue Step</h2>
-              <p class="muted">Build staged actions for the selected target. Wait-for-completion works with Bot.goto commands and Bot.craft.</p>
+              <p class="muted">Build staged actions for the selected target. Wait-for-completion works with Bot.goto commands, Bot.craft, and Bot.smelt.</p>
               <form id="queueStepForm" class="settings-form queue-step-form">
                 <label>Step Type
                   <select id="queueStepType">
@@ -165,7 +166,7 @@
                 </label>
 
                 <label id="queueCommandRow">Command
-                  <input id="queueCommandInput" type="text" placeholder="goto 100 64 200">
+                  <input id="queueCommandInput" type="text" list="commandAutocompleteList" placeholder="goto 100 64 200">
                 </label>
 
                 <label id="queueWaitCompletionRow" class="check-row">
@@ -278,6 +279,7 @@
                 <h3>Crafting</h3>
                 <ul class="command-list">
                   <li><code>Bot.craft &lt;itemId&gt; [count]</code><span>Check inventory, find a nearby crafting table when required, and craft the requested item.</span></li>
+                  <li><code>Bot.smelt &lt;itemId&gt; [count] [station]</code><span>Use furnace-like stations for smelting recipes. Station can be auto, furnace, smoker, or blast_furnace.</span></li>
                 </ul>
               </section>
 
@@ -310,7 +312,7 @@
         <section class="tab-panel" id="settings">
           <article class="card settings-card">
             <h2>Server + Starter Bot Settings</h2>
-            <p class="muted">Saved to disk. Restart bots to apply connection/auth changes.</p>
+            <p class="muted">Saved to disk. Restart bots to apply connection/auth changes. Command autocomplete suggestions use your configured MC version.</p>
             <form id="settingsForm" class="settings-form">
               <label>Server Host<input name="host" required></label>
               <label>Server Port<input name="port" type="number" required></label>
@@ -334,7 +336,7 @@
                 <summary>Command Range Settings</summary>
                 <div class="settings-dropdown-body">
                   <label>Goal Range (<code>goto/follow/attack/come</code>)<input name="rangeGoal" type="number" min="0" step="1" required></label>
-                  <label>Craft Search Radius (<code>Bot.craft</code>)<input name="craftSearchRadius" type="number" min="1" step="1" required></label>
+                  <label>Craft/Smelt Station Search Radius (<code>Bot.craft</code>, <code>Bot.smelt</code>)<input name="craftSearchRadius" type="number" min="1" step="1" required></label>
                   <label>Empty Chest Search Radius (<code>Bot.empty</code>)<input name="emptyInventoryRadius" type="number" min="1" step="1" required></label>
                   <label>Collect Search Radius (<code>Bot.collect</code>)<input name="collectRadius" type="number" min="1" step="1" required></label>
                   <label>Mine Search Radius (<code>Bot.mine</code>)<input name="mineSearchRadius" type="number" min="1" step="1" required></label>
