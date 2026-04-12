@@ -5,3 +5,4 @@ node_modules
 bot-settings.json
 MCBotAssistant.exe
 MultiBot_beta1.0.exe
+queue-persistence.json

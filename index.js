@@ -22,6 +22,7 @@ const recipeRegistry = require('./data/recipe-registry')
 const IS_PACKAGED = typeof process.pkg !== 'undefined'
 const APP_BASE_DIR = IS_PACKAGED ? path.dirname(process.execPath) : __dirname
 const SETTINGS_FILE = path.join(APP_BASE_DIR, 'bot-settings.json')
+const QUEUE_PERSISTENCE_FILE = path.join(APP_BASE_DIR, 'queue-persistence.json')
 const BUNDLED_SETTINGS_FILE = path.join(__dirname, 'bot-settings.json')
 const STARTER_BOT_ID = 'starter'
 
@@ -248,6 +249,7 @@ let viewerEnabled = Boolean(botSettings.viewerEnabled)
 let tpsDashboardEnabled = typeof botSettings.tpsDashboardEnabled === 'boolean' ? botSettings.tpsDashboardEnabled : true
 let viewerAttachedBotId = null
 const queueByTarget = new Map()
+const savedQueuesByTarget = new Map()
 
 const HOSTILE_ENTITY_NAMES = new Set([
   'zombie',
@@ -391,6 +393,151 @@ function normalizeQueueStep(stepInput) {
 
 function getQueueDefaultSettings() {
   return normalizeQueueSettings(botSettings.queueSettings)
+}
+
+function cloneQueueSteps(steps) {
+  return safeArray(steps).map((step) => normalizeQueueStep(step))
+}
+
+function normalizeSavedQueueName(name) {
+  const normalized = String(name || '').trim()
+  if (!normalized) throw new Error('Saved queue name is required')
+  if (normalized.length > 80) throw new Error('Saved queue name is too long (max 80 characters)')
+  return normalized
+}
+
+function ensureTargetSavedQueues(target) {
+  const targetKey = String(target || STARTER_BOT_ID)
+  if (!savedQueuesByTarget.has(targetKey)) {
+    savedQueuesByTarget.set(targetKey, new Map())
+  }
+  return savedQueuesByTarget.get(targetKey)
+}
+
+function serializeSavedQueues(target) {
+  const targetSaved = ensureTargetSavedQueues(target)
+  return Array.from(targetSaved.values())
+    .map((entry) => ({
+      name: entry.name,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      stepCount: safeArray(entry.steps).length,
+      settings: normalizeQueueSettings(entry.settings)
+    }))
+    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+}
+
+function emitSavedQueues(target) {
+  if (!io) return
+  const targetKey = String(target || STARTER_BOT_ID)
+  io.emit('saved_queues', { target: targetKey, queues: serializeSavedQueues(targetKey) })
+}
+
+function loadQueuePersistence() {
+  queueByTarget.clear()
+  savedQueuesByTarget.clear()
+
+  let parsed = null
+  try {
+    const raw = fs.readFileSync(QUEUE_PERSISTENCE_FILE, 'utf8')
+    parsed = JSON.parse(raw)
+  } catch {
+    return
+  }
+
+  const queues = parsed && typeof parsed === 'object' ? (parsed.queues || {}) : {}
+  const version = Number(parsed?.version || 1)
+
+  for (const [targetKeyRaw, targetDataRaw] of Object.entries(queues)) {
+    const targetKey = String(targetKeyRaw || STARTER_BOT_ID)
+    const targetData = targetDataRaw || {}
+    const savedMap = ensureTargetSavedQueues(targetKey)
+
+    let currentData = null
+    if (version >= 2 && targetData.current && typeof targetData.current === 'object') {
+      currentData = targetData.current
+    } else if (version === 1 && (Array.isArray(targetData.steps) || targetData.settings)) {
+      currentData = targetData
+    }
+
+    if (currentData) {
+      let steps = []
+      try {
+        steps = cloneQueueSteps(currentData.steps)
+      } catch {
+        steps = []
+      }
+
+      queueByTarget.set(targetKey, {
+        target: targetKey,
+        steps,
+        running: false,
+        stopRequested: false,
+        currentStepIndex: -1,
+        settings: normalizeQueueSettings(currentData.settings),
+        perBot: {},
+        lastError: null
+      })
+    }
+
+    const savedRaw = version >= 2 ? (targetData.saved || {}) : {}
+    for (const [savedNameRaw, savedEntryRaw] of Object.entries(savedRaw)) {
+      try {
+        const name = normalizeSavedQueueName(savedNameRaw)
+        const entry = savedEntryRaw || {}
+        const createdAt = entry.createdAt || new Date().toISOString()
+        const updatedAt = entry.updatedAt || createdAt
+        savedMap.set(name, {
+          name,
+          createdAt,
+          updatedAt,
+          settings: normalizeQueueSettings(entry.settings),
+          steps: cloneQueueSteps(entry.steps)
+        })
+      } catch {
+        // Ignore invalid saved queue entries.
+      }
+    }
+  }
+}
+
+function saveQueuePersistence() {
+  try {
+    fs.mkdirSync(path.dirname(QUEUE_PERSISTENCE_FILE), { recursive: true })
+  } catch {
+    // Ignore directory creation issues and attempt file write anyway.
+  }
+
+  const targets = new Set([
+    ...queueByTarget.keys(),
+    ...savedQueuesByTarget.keys()
+  ])
+
+  const queues = {}
+  for (const targetKey of targets) {
+    const queue = ensureTargetQueue(targetKey)
+    const savedMap = ensureTargetSavedQueues(targetKey)
+    const saved = {}
+
+    for (const [name, entry] of savedMap.entries()) {
+      saved[name] = {
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+        settings: normalizeQueueSettings(entry.settings),
+        steps: cloneQueueSteps(entry.steps)
+      }
+    }
+
+    queues[targetKey] = {
+      current: {
+        settings: normalizeQueueSettings(queue.settings),
+        steps: cloneQueueSteps(queue.steps)
+      },
+      saved
+    }
+  }
+
+  fs.writeFileSync(QUEUE_PERSISTENCE_FILE, JSON.stringify({ version: 2, queues }, null, 2) + '\n', 'utf8')
 }
 
 function ensureTargetQueue(target) {
@@ -2725,6 +2872,7 @@ function startWebServer() {
 
       const step = normalizeQueueStep(req.body?.step)
       queue.steps.push(step)
+      saveQueuePersistence()
       emitQueueState(target)
       return res.json({ ok: true, queue: serializeTargetQueue(queue) })
     } catch (error) {
@@ -2752,6 +2900,7 @@ function startWebServer() {
       }
 
       queue.steps = reordered
+      saveQueuePersistence()
       emitQueueState(target)
       return res.json({ ok: true, queue: serializeTargetQueue(queue) })
     } catch (error) {
@@ -2772,6 +2921,7 @@ function startWebServer() {
         return res.status(404).json({ ok: false, error: 'Step not found' })
       }
 
+      saveQueuePersistence()
       emitQueueState(target)
       return res.json({ ok: true, queue: serializeTargetQueue(queue) })
     } catch (error) {
@@ -2788,6 +2938,7 @@ function startWebServer() {
       queue.lastError = null
       queue.currentStepIndex = -1
       queue.perBot = {}
+      saveQueuePersistence()
       emitQueueState(target)
       return res.json({ ok: true, queue: serializeTargetQueue(queue) })
     } catch (error) {
@@ -2802,8 +2953,112 @@ function startWebServer() {
       if (queue.running) throw new Error('Cannot update queue settings while running')
 
       queue.settings = normalizeQueueSettings(req.body?.settings)
+      saveQueuePersistence()
       emitQueueState(target)
       return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.get('/api/queue/saved', (req, res) => {
+    try {
+      const target = String(req.query?.target || STARTER_BOT_ID)
+      return res.json({ ok: true, queues: serializeSavedQueues(target) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/saved', (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const name = normalizeSavedQueueName(req.body?.name)
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Cannot save queue while running')
+      if (!queue.steps.length) throw new Error('Cannot save an empty queue')
+
+      const now = new Date().toISOString()
+      const targetSaved = ensureTargetSavedQueues(target)
+      const previous = targetSaved.get(name)
+      targetSaved.set(name, {
+        name,
+        createdAt: previous?.createdAt || now,
+        updatedAt: now,
+        settings: normalizeQueueSettings(queue.settings),
+        steps: cloneQueueSteps(queue.steps)
+      })
+
+      saveQueuePersistence()
+      emitSavedQueues(target)
+      return res.json({ ok: true, queues: serializeSavedQueues(target) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/saved/load', (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const name = normalizeSavedQueueName(req.body?.name)
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Cannot load queue while running')
+
+      const saved = ensureTargetSavedQueues(target).get(name)
+      if (!saved) throw new Error('Saved queue not found')
+
+      queue.steps = cloneQueueSteps(saved.steps)
+      queue.settings = normalizeQueueSettings(saved.settings)
+      queue.lastError = null
+      queue.currentStepIndex = -1
+      queue.perBot = {}
+      saveQueuePersistence()
+      emitQueueState(target)
+      return res.json({ ok: true, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.post('/api/queue/saved/run', async (req, res) => {
+    try {
+      const target = String(req.body?.target || STARTER_BOT_ID)
+      const name = normalizeSavedQueueName(req.body?.name)
+      const username = String(req.body?.username || 'WebUI')
+      const queue = ensureTargetQueue(target)
+      if (queue.running) throw new Error('Queue is already running for this target')
+
+      const saved = ensureTargetSavedQueues(target).get(name)
+      if (!saved) throw new Error('Saved queue not found')
+
+      queue.steps = cloneQueueSteps(saved.steps)
+      queue.settings = normalizeQueueSettings(saved.settings)
+      queue.lastError = null
+      queue.currentStepIndex = -1
+      queue.perBot = {}
+      saveQueuePersistence()
+      emitQueueState(target)
+
+      const result = await startTargetQueue({ target, username })
+      return res.json({ ok: true, ...result, queue: serializeTargetQueue(queue) })
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message })
+    }
+  })
+
+  app.delete('/api/queue/saved/:name', (req, res) => {
+    try {
+      const target = String(req.query?.target || STARTER_BOT_ID)
+      const name = normalizeSavedQueueName(req.params.name)
+      const targetSaved = ensureTargetSavedQueues(target)
+      if (!targetSaved.has(name)) {
+        return res.status(404).json({ ok: false, error: 'Saved queue not found' })
+      }
+
+      targetSaved.delete(name)
+      saveQueuePersistence()
+      emitSavedQueues(target)
+      return res.json({ ok: true, queues: serializeSavedQueues(target) })
     } catch (error) {
       return res.status(400).json({ ok: false, error: error.message })
     }
@@ -2910,6 +3165,10 @@ function startWebServer() {
     for (const queue of queueByTarget.values()) {
       socket.emit('queue_state', { target: queue.target, queue: serializeTargetQueue(queue) })
     }
+
+    for (const target of savedQueuesByTarget.keys()) {
+      socket.emit('saved_queues', { target, queues: serializeSavedQueues(target) })
+    }
   })
 
   server.listen(botSettings.webPort, () => {
@@ -2947,6 +3206,7 @@ async function bootstrapBots() {
 }
 
 async function main() {
+  loadQueuePersistence()
   await bootstrapBots()
   startWebServer()
   startViewerFor(botSettings.viewerTargetBotId)

@@ -599,6 +599,32 @@ button,
   margin-top: 0.4rem;
 }
 
+.saved-queues-card {
+  grid-column: 1 / -1;
+}
+
+.saved-queue-form {
+  margin-top: 0.5rem;
+}
+
+.saved-queues-list {
+  margin-top: 0.7rem;
+}
+
+.saved-queue-row {
+  align-items: center;
+}
+
+.saved-queue-info {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.saved-queue-info span {
+  font-size: 0.82rem;
+  color: #5f5a4d;
+}
+
 @media (max-width: 960px) {
   .main-grid {
     grid-template-columns: 1fr;

@@ -224,6 +224,20 @@
                 <button id="queueClearBtn" type="button">Clear Queue</button>
               </div>
             </article>
+
+            <article class="card saved-queues-card">
+              <h2>Saved Queues</h2>
+              <p class="muted">Save your current queue as a named script and run it later with one click.</p>
+              <form id="savedQueueForm" class="settings-form saved-queue-form">
+                <label>Queue Name
+                  <input id="savedQueueNameInput" type="text" maxlength="80" placeholder="Example: Tree Farm Loop" required>
+                </label>
+                <div class="inline-actions wide">
+                  <button id="savedQueueSaveBtn" type="submit">Save Current Queue</button>
+                </div>
+              </form>
+              <div id="savedQueuesList" class="list saved-queues-list"></div>
+            </article>
           </div>
         </section>
 

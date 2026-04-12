@@ -51,6 +51,10 @@ const queueStepsList = document.getElementById('queueStepsList')
 const queueStartBtn = document.getElementById('queueStartBtn')
 const queueStopBtn = document.getElementById('queueStopBtn')
 const queueClearBtn = document.getElementById('queueClearBtn')
+const savedQueueForm = document.getElementById('savedQueueForm')
+const savedQueueNameInput = document.getElementById('savedQueueNameInput')
+const savedQueueSaveBtn = document.getElementById('savedQueueSaveBtn')
+const savedQueuesList = document.getElementById('savedQueuesList')
 
 const openAddBotBtn = document.getElementById('openAddBotBtn')
 const closeAddBotBtn = document.getElementById('closeAddBotBtn')
@@ -98,6 +102,7 @@ let selectedQueue = {
   perBot: {},
   lastError: null
 }
+let selectedSavedQueues = []
 let autocompleteCommands = []
 let autocompleteItems = []
 let activeAutocompleteOptions = []
@@ -543,6 +548,7 @@ function renderAll() {
   renderStatusAndViewer()
   renderQueueControls()
   renderQueue()
+  renderSavedQueues()
 }
 
 function queueIsCommandWaitable(command) {
@@ -659,6 +665,89 @@ function renderQueue() {
   queueSettingsForm.querySelectorAll('input,select,button').forEach((el) => {
     el.disabled = selectedQueue.running
   })
+
+  if (savedQueueSaveBtn) {
+    savedQueueSaveBtn.disabled = selectedQueue.running || !selectedQueue.steps.length
+  }
+}
+
+function renderSavedQueues() {
+  if (!savedQueuesList) return
+
+  savedQueuesList.innerHTML = ''
+
+  if (!Array.isArray(selectedSavedQueues) || !selectedSavedQueues.length) {
+    const empty = document.createElement('div')
+    empty.className = 'muted'
+    empty.textContent = 'No saved queues for this target yet.'
+    savedQueuesList.appendChild(empty)
+    return
+  }
+
+  selectedSavedQueues.forEach((savedQueue) => {
+    const row = document.createElement('div')
+    row.className = 'list-row saved-queue-row'
+
+    const info = document.createElement('div')
+    info.className = 'saved-queue-info'
+    const timestamp = savedQueue.updatedAt ? new Date(savedQueue.updatedAt).toLocaleString() : ''
+    info.innerHTML = `<strong>${savedQueue.name}</strong><span>${savedQueue.stepCount || 0} steps${timestamp ? ` • updated ${timestamp}` : ''}</span>`
+
+    const actions = document.createElement('div')
+    actions.className = 'inline-actions queue-inline-actions'
+
+    const loadBtn = document.createElement('button')
+    loadBtn.className = 'mini-btn'
+    loadBtn.textContent = 'Load'
+    loadBtn.disabled = selectedQueue.running
+    loadBtn.addEventListener('click', async () => {
+      try {
+        await postJson('/api/queue/saved/load', {
+          target: selectedTarget,
+          name: savedQueue.name
+        })
+        await loadSelectedQueue()
+      } catch (error) {
+        appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+      }
+    })
+
+    const runBtn = document.createElement('button')
+    runBtn.className = 'mini-btn action-btn-primary'
+    runBtn.textContent = 'Run'
+    runBtn.disabled = selectedQueue.running
+    runBtn.addEventListener('click', async () => {
+      try {
+        await postJson('/api/queue/saved/run', {
+          target: selectedTarget,
+          name: savedQueue.name,
+          username: 'WebUI'
+        })
+      } catch (error) {
+        appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+      }
+    })
+
+    const deleteBtn = document.createElement('button')
+    deleteBtn.className = 'mini-btn danger'
+    deleteBtn.textContent = 'Delete'
+    deleteBtn.disabled = selectedQueue.running
+    deleteBtn.addEventListener('click', async () => {
+      try {
+        await deleteJson(`/api/queue/saved/${encodeURIComponent(savedQueue.name)}?target=${encodeURIComponent(selectedTarget)}`)
+      } catch (error) {
+        appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+      }
+    })
+
+    actions.appendChild(loadBtn)
+    actions.appendChild(runBtn)
+    actions.appendChild(deleteBtn)
+
+    row.appendChild(info)
+    row.appendChild(actions)
+    savedQueuesList.appendChild(row)
+  })
 }
 
 async function loadSelectedQueue() {
@@ -671,6 +760,16 @@ async function loadSelectedQueue() {
       queueTimeoutSecInput.value = selectedQueue.settings?.completionTimeoutSec ?? 60
       renderQueue()
     }
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+}
+
+async function loadSavedQueues() {
+  try {
+    const result = await getJson(`/api/queue/saved?target=${encodeURIComponent(selectedTarget)}`)
+    selectedSavedQueues = Array.isArray(result?.queues) ? result.queues : []
+    renderSavedQueues()
   } catch (error) {
     appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
   }
@@ -754,6 +853,7 @@ commandTarget.addEventListener('change', () => {
   renderBots()
   renderGroups()
   loadSelectedQueue()
+  loadSavedQueues()
 })
 
 queueStepType.addEventListener('change', () => {
@@ -1037,6 +1137,7 @@ socket.on('bootstrap', ({ state, settings, logs }) => {
   renderAll()
   renderQueueControls()
   loadSelectedQueue()
+  loadSavedQueues()
   loadAutocompleteData()
 })
 
@@ -1056,6 +1157,7 @@ socket.on('state', (state) => {
 
   if (selectedTarget !== previousTarget) {
     loadSelectedQueue()
+    loadSavedQueues()
   }
 })
 
@@ -1066,6 +1168,13 @@ socket.on('queue_state', ({ target, queue }) => {
   queueRetryCountInput.value = selectedQueue.settings?.retryCount ?? 1
   queueTimeoutSecInput.value = selectedQueue.settings?.completionTimeoutSec ?? 60
   renderQueue()
+  renderSavedQueues()
+})
+
+socket.on('saved_queues', ({ target, queues }) => {
+  if (String(target) !== String(selectedTarget)) return
+  selectedSavedQueues = Array.isArray(queues) ? queues : []
+  renderSavedQueues()
 })
 
 socket.on('log', (log) => {
@@ -1136,6 +1245,24 @@ queueSettingsForm.addEventListener('submit', async (event) => {
       }
     })
     await loadSelectedQueue()
+  } catch (error) {
+    appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
+  }
+})
+
+savedQueueForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+
+  try {
+    const name = savedQueueNameInput.value.trim()
+    if (!name) return
+
+    await postJson('/api/queue/saved', {
+      target: selectedTarget,
+      name
+    })
+
+    savedQueueNameInput.value = ''
   } catch (error) {
     appendLog({ ts: new Date().toISOString(), type: 'error', message: error.message })
   }
