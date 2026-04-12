@@ -4,3 +4,5 @@ add mobs as valid bot.attack targets
 Fix smelting command to make it easier - partially done
 add support for using the bow in combat
 add support for using the shield in combat
+fix recipe issue, where it doesn't take all recipies for an item into account - done 
+make shure that the queue delay works correctly (goes to next, before completing previous)

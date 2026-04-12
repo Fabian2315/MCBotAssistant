@@ -1239,47 +1239,353 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
     }, 0)
   }
 
-  function buildRecipeIngredientPlan(recipe, craftCount) {
+  function makeItemKey(itemType, metadata = null) {
+    return `${itemType}:${metadata == null ? '*' : metadata}`
+  }
+
+  function buildInventoryCountMap() {
+    const counts = new Map()
+
+    for (const item of bot.inventory.items()) {
+      const metadata = item.metadata == null ? null : item.metadata
+      const exactKey = makeItemKey(item.type, metadata)
+      const wildcardKey = makeItemKey(item.type, null)
+
+      counts.set(exactKey, (counts.get(exactKey) || 0) + item.count)
+      if (wildcardKey !== exactKey) {
+        counts.set(wildcardKey, (counts.get(wildcardKey) || 0) + item.count)
+      }
+    }
+
+    return counts
+  }
+
+  function getCountFromMap(counts, itemType, metadata = null) {
+    return counts.get(makeItemKey(itemType, metadata)) || 0
+  }
+
+  function adjustCountInMap(counts, itemType, metadata = null, delta = 0) {
+    const normalizedMetadata = metadata == null ? null : metadata
+    const exactKey = makeItemKey(itemType, normalizedMetadata)
+    const wildcardKey = makeItemKey(itemType, null)
+
+    counts.set(exactKey, (counts.get(exactKey) || 0) + delta)
+    if (wildcardKey !== exactKey) {
+      counts.set(wildcardKey, (counts.get(wildcardKey) || 0) + delta)
+    }
+  }
+
+  function extractRecipeSlots(recipe) {
+    if (Array.isArray(recipe.inShape) && recipe.inShape.length) {
+      const slots = []
+
+      for (let y = 0; y < recipe.inShape.length; y += 1) {
+        const row = Array.isArray(recipe.inShape[y]) ? recipe.inShape[y] : []
+        for (let x = 0; x < row.length; x += 1) {
+          const ingredient = row[x]
+          if (!ingredient || ingredient.id === -1) continue
+
+          slots.push({
+            kind: 'shape',
+            x,
+            y,
+            count: Math.max(1, Number(ingredient.count) || 1),
+            options: [{ id: ingredient.id, metadata: ingredient.metadata == null ? null : ingredient.metadata }]
+          })
+        }
+      }
+
+      return slots
+    }
+
+    return (recipe.ingredients || [])
+      .map((ingredient, index) => {
+        if (!ingredient || ingredient.id === -1) return null
+
+        return {
+          kind: 'ingredient',
+          index,
+          count: Math.max(1, Number(ingredient.count) || 1),
+          options: [{ id: ingredient.id, metadata: ingredient.metadata == null ? null : ingredient.metadata }]
+        }
+      })
+      .filter(Boolean)
+  }
+
+  function getRecipeFamilySignature(recipe) {
+    const slots = extractRecipeSlots(recipe)
+    const slotSignature = slots
+      .map((slot) => slot.kind === 'shape'
+        ? `shape:${slot.x}:${slot.y}:${slot.count}`
+        : `ingredient:${slot.index}:${slot.count}`)
+      .join('|')
+
+    const outShapeSignature = JSON.stringify((recipe.outShape || null), (key, value) => {
+      if (!value || typeof value !== 'object') return value
+      if (Array.isArray(value)) return value
+      return {
+        id: value.id,
+        metadata: value.metadata == null ? null : value.metadata,
+        count: value.count
+      }
+    })
+
+    return [
+      recipe.result?.id ?? 'unknown',
+      recipe.result?.metadata == null ? '*' : recipe.result.metadata,
+      recipe.result?.count ?? 1,
+      recipe.requiresTable ? 'table' : 'inventory',
+      slotSignature,
+      outShapeSignature
+    ].join('::')
+  }
+
+  function buildRecipeFamilies(recipes) {
+    const familiesBySignature = new Map()
+
+    for (const recipe of recipes) {
+      const signature = getRecipeFamilySignature(recipe)
+      const exactSlots = extractRecipeSlots(recipe)
+      const existing = familiesBySignature.get(signature)
+
+      if (!existing) {
+        familiesBySignature.set(signature, {
+          representative: recipe,
+          slots: exactSlots.map((slot) => ({
+            ...slot,
+            options: slot.options.slice()
+          })),
+          variants: [recipe]
+        })
+        continue
+      }
+
+      existing.variants.push(recipe)
+      for (let index = 0; index < exactSlots.length; index += 1) {
+        const slot = exactSlots[index]
+        const familySlot = existing.slots[index]
+        const optionKey = makeItemKey(slot.options[0].id, slot.options[0].metadata)
+
+        if (!familySlot.options.some((option) => makeItemKey(option.id, option.metadata) === optionKey)) {
+          familySlot.options.push(slot.options[0])
+        }
+      }
+    }
+
+    return Array.from(familiesBySignature.values())
+  }
+
+  function formatIngredientOptionsLabel(options) {
+    if (!options.length) return 'unknown ingredient'
+    if (options.length === 1) return getItemLabel(options[0].id, options[0].metadata)
+
+    const labels = options
+      .map((option) => getItemLabel(option.id, option.metadata))
+      .filter((label, index, values) => values.indexOf(label) === index)
+
+    if (labels.length <= 4) return labels.join(' or ')
+    return `any of: ${labels.join(', ')}`
+  }
+
+  function buildFamilyIngredientAvailability(slots, inventoryCounts) {
     const requiredByKey = new Map()
 
-    for (const delta of recipe.delta || []) {
-      if (!delta || delta.count >= 0) continue
-
-      const metadata = delta.metadata == null ? null : delta.metadata
-      const key = `${delta.id}:${metadata == null ? '*' : metadata}`
-      const requiredCount = Math.abs(delta.count) * craftCount
+    for (const slot of slots) {
+      const optionKeys = slot.options
+        .map((option) => makeItemKey(option.id, option.metadata))
+        .sort()
+      const key = `${slot.kind}:${optionKeys.join('|')}`
+      const available = slot.options.reduce((total, option) => total + getCountFromMap(inventoryCounts, option.id, option.metadata), 0)
       const existing = requiredByKey.get(key)
 
       if (existing) {
-        existing.required += requiredCount
+        existing.required += slot.count
       } else {
         requiredByKey.set(key, {
-          itemType: delta.id,
-          metadata,
-          required: requiredCount
+          required: slot.count,
+          available,
+          label: formatIngredientOptionsLabel(slot.options)
+        })
+      }
+    }
+
+    return Array.from(requiredByKey.values()).map((entry) => ({
+      ...entry,
+      missing: Math.max(0, entry.required - entry.available)
+    }))
+  }
+
+  function chooseRecipeAssignments(slots, inventoryCounts) {
+    const orderedSlots = slots
+      .map((slot, index) => ({
+        ...slot,
+        slotIndex: index,
+        options: slot.options.slice().sort((left, right) => {
+          const availableDiff = getCountFromMap(inventoryCounts, right.id, right.metadata) - getCountFromMap(inventoryCounts, left.id, left.metadata)
+          if (availableDiff !== 0) return availableDiff
+          return makeItemKey(left.id, left.metadata).localeCompare(makeItemKey(right.id, right.metadata))
+        })
+      }))
+      .sort((left, right) => {
+        if (left.options.length !== right.options.length) return left.options.length - right.options.length
+        return right.count - left.count
+      })
+
+    const totalRequired = orderedSlots.reduce((total, slot) => total + slot.count, 0)
+    let best = { assignedUnits: -1, assignments: new Map() }
+
+    function search(slotIndex, assignments, assignedUnits) {
+      if (assignedUnits > best.assignedUnits) {
+        best = {
+          assignedUnits,
+          assignments: new Map(assignments)
+        }
+      }
+
+      if (slotIndex >= orderedSlots.length) return
+
+      const remainingUnits = orderedSlots.slice(slotIndex).reduce((total, slot) => total + slot.count, 0)
+      if (assignedUnits + remainingUnits <= best.assignedUnits) return
+
+      const slot = orderedSlots[slotIndex]
+      for (const option of slot.options) {
+        const available = getCountFromMap(inventoryCounts, option.id, option.metadata)
+        if (available < slot.count) continue
+
+        adjustCountInMap(inventoryCounts, option.id, option.metadata, -slot.count)
+        assignments.set(slot.slotIndex, {
+          id: option.id,
+          metadata: option.metadata,
+          count: slot.count
+        })
+        search(slotIndex + 1, assignments, assignedUnits + slot.count)
+        assignments.delete(slot.slotIndex)
+        adjustCountInMap(inventoryCounts, option.id, option.metadata, slot.count)
+
+        if (best.assignedUnits === totalRequired) return
+      }
+
+      search(slotIndex + 1, assignments, assignedUnits)
+    }
+
+    search(0, new Map(), 0)
+
+    return {
+      assignedUnits: best.assignedUnits,
+      totalRequired,
+      complete: best.assignedUnits === totalRequired,
+      assignments: best.assignments
+    }
+  }
+
+  function buildAssignedIngredientList(assignments) {
+    const requiredByKey = new Map()
+
+    for (const assignment of assignments.values()) {
+      const key = makeItemKey(assignment.id, assignment.metadata)
+      const existing = requiredByKey.get(key)
+
+      if (existing) {
+        existing.required += assignment.count
+      } else {
+        requiredByKey.set(key, {
+          itemType: assignment.id,
+          metadata: assignment.metadata,
+          required: assignment.count
         })
       }
     }
 
     return Array.from(requiredByKey.values()).map((entry) => {
       const available = countInventoryItem(entry.itemType, entry.metadata)
-      const missing = Math.max(0, entry.required - available)
-
       return {
         ...entry,
         available,
-        missing,
+        missing: Math.max(0, entry.required - available),
         label: getItemLabel(entry.itemType, entry.metadata)
       }
     })
   }
 
-  function buildRecipePlan({ recipe, itemData, requestedCount }) {
-    const resultPerCraft = Math.max(1, recipe.result?.count || 1)
+  function buildRecipeFromAssignments(family, assignments) {
+    const recipe = {
+      result: family.representative.result,
+      requiresTable: Boolean(family.representative.requiresTable),
+      inShape: Array.isArray(family.representative.inShape)
+        ? family.representative.inShape.map((row) => (Array.isArray(row)
+          ? row.map((ingredient) => (ingredient && ingredient.id === -1
+            ? {
+                id: -1,
+                metadata: ingredient.metadata == null ? null : ingredient.metadata,
+                count: ingredient.count
+              }
+            : null))
+          : []))
+        : null,
+      ingredients: Array.isArray(family.representative.ingredients)
+        ? family.representative.ingredients.map(() => null)
+        : null,
+      outShape: family.representative.outShape
+        ? JSON.parse(JSON.stringify(family.representative.outShape))
+        : null
+    }
+
+    const delta = new Map()
+
+    for (let index = 0; index < family.slots.length; index += 1) {
+      const slot = family.slots[index]
+      const assignment = assignments.get(index)
+      if (!assignment) return null
+
+      const ingredient = {
+        id: assignment.id,
+        metadata: assignment.metadata,
+        count: slot.count
+      }
+
+      if (slot.kind === 'shape') {
+        recipe.inShape[slot.y][slot.x] = ingredient
+      } else {
+        recipe.ingredients[slot.index] = ingredient
+      }
+
+      const ingredientKey = makeItemKey(ingredient.id, ingredient.metadata)
+      const existing = delta.get(ingredientKey)
+      if (existing) {
+        existing.count -= ingredient.count
+      } else {
+        delta.set(ingredientKey, {
+          id: ingredient.id,
+          metadata: ingredient.metadata,
+          count: -ingredient.count
+        })
+      }
+    }
+
+    const resultMetadata = recipe.result?.metadata == null ? null : recipe.result.metadata
+    delta.set(makeItemKey(recipe.result.id, resultMetadata), {
+      id: recipe.result.id,
+      metadata: resultMetadata,
+      count: recipe.result.count || 1
+    })
+
+    recipe.delta = Array.from(delta.values())
+    return recipe
+  }
+
+  function buildRecipePlan({ family, itemData, requestedCount }) {
+    const resultPerCraft = Math.max(1, family.representative.result?.count || 1)
     const craftCount = Math.max(1, Math.ceil(requestedCount / resultPerCraft))
-    const ingredients = buildRecipeIngredientPlan(recipe, craftCount)
+    const inventoryCounts = buildInventoryCountMap()
+    const assignmentResult = chooseRecipeAssignments(family.slots, new Map(inventoryCounts))
+    const ingredients = assignmentResult.complete
+      ? buildAssignedIngredientList(assignmentResult.assignments)
+      : buildFamilyIngredientAvailability(family.slots, inventoryCounts)
     const missing = ingredients.filter((ingredient) => ingredient.missing > 0)
     const missingTotal = missing.reduce((total, ingredient) => total + ingredient.missing, 0)
+    const recipe = assignmentResult.complete
+      ? buildRecipeFromAssignments(family, assignmentResult.assignments)
+      : family.representative
 
     return {
       recipe,
@@ -1290,9 +1596,10 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
       ingredients,
       missing,
       missingTotal,
-      requiresTable: Boolean(recipe.requiresTable),
-      station: recipe.requiresTable ? 'crafting_table' : 'inventory',
-      resultLabel: itemData.displayName || formatItemName(itemData.name)
+      requiresTable: Boolean(family.representative.requiresTable),
+      station: family.representative.requiresTable ? 'crafting_table' : 'inventory',
+      resultLabel: itemData.displayName || formatItemName(itemData.name),
+      variantCount: family.variants.length
     }
   }
 
@@ -1355,8 +1662,9 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
       throw new Error(`No crafting recipe found for ${target.normalizedName}`)
     }
 
-    const plans = recipes.map((recipe) => buildRecipePlan({
-      recipe,
+    const families = buildRecipeFamilies(recipes)
+    const plans = families.map((family) => buildRecipePlan({
+      family,
       itemData: target.itemData,
       requestedCount
     }))
@@ -1587,29 +1895,43 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
       throw new Error('Bot must be connected before it can craft')
     }
 
-    const plan = planCraft(itemName, requestedCount)
-
-    if (plan.missing.length) {
-      throw new Error(`Missing materials for ${plan.label}: ${formatMissingIngredients(plan.missing)}`)
-    }
-
     let craftingTableBlock = null
-    if (plan.requiresTable) {
-      craftingTableBlock = findNearbyCraftingTable()
-      if (!craftingTableBlock) {
-        throw new Error(`No crafting table found within ${getCommandSettings().craftSearchRadius} blocks`)
+    let craftedCount = 0
+    let lastPlan = null
+
+    while (craftedCount < requestedCount) {
+      const plan = planCraft(itemName, 1)
+      lastPlan = plan
+
+      if (plan.missing.length) {
+        if (craftedCount > 0) {
+          throw new Error(`Crafted ${craftedCount} ${plan.label} before running out of materials: ${formatMissingIngredients(plan.missing)}`)
+        }
+
+        throw new Error(`Missing materials for ${plan.label}: ${formatMissingIngredients(plan.missing)}`)
       }
 
-      await moveNearBlock(craftingTableBlock, 1)
+      if (plan.requiresTable) {
+        if (!craftingTableBlock) {
+          craftingTableBlock = findNearbyCraftingTable()
+          if (!craftingTableBlock) {
+            throw new Error(`No crafting table found within ${getCommandSettings().craftSearchRadius} blocks`)
+          }
+
+          await moveNearBlock(craftingTableBlock, 1)
+        }
+      }
+
+      const resultMetadata = plan.recipe.result?.metadata == null ? null : plan.recipe.result.metadata
+      const beforeCount = countInventoryItem(plan.itemData.id, resultMetadata)
+      await bot.craft(plan.recipe, 1, craftingTableBlock)
+      const afterCount = countInventoryItem(plan.itemData.id, resultMetadata)
+      const producedNow = Math.max(plan.resultPerCraft, afterCount - beforeCount)
+      craftedCount += producedNow
     }
 
-    const beforeCount = countInventoryItem(plan.itemData.id, plan.recipe.result?.metadata == null ? null : plan.recipe.result.metadata)
-    await bot.craft(plan.recipe, plan.craftCount, craftingTableBlock)
-    const afterCount = countInventoryItem(plan.itemData.id, plan.recipe.result?.metadata == null ? null : plan.recipe.result.metadata)
-    const craftedCount = Math.max(plan.producedCount, afterCount - beforeCount)
-    const stationLabel = plan.requiresTable ? 'crafting table' : 'inventory crafting'
-
-    say(`SUCCESS: Crafted ${craftedCount} ${plan.label} using ${stationLabel}`)
+    const stationLabel = lastPlan?.requiresTable ? 'crafting table' : 'inventory crafting'
+    say(`SUCCESS: Crafted ${craftedCount} ${lastPlan?.label || formatItemName(itemName)} using ${stationLabel}`)
   }
 
   function findPlacementSpot() {
