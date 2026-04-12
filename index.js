@@ -5,7 +5,7 @@ const express = require('express')
 const { Server } = require('socket.io')
 const mineflayer = require('mineflayer')
 const tpsPlugin = require('mineflayer-tps')(mineflayer)
-const mineflayerViewer = require('prismarine-viewer').mineflayer
+let mineflayerViewer = null
 const {
   pathfinder,
   Movements,
@@ -13,12 +13,16 @@ const {
 } = require('mineflayer-pathfinder')
 const pvp = require('mineflayer-pvp').plugin
 const collectBlock = require('mineflayer-collectblock').plugin
-const autoEat = require('mineflayer-auto-eat').loader
+let autoEat = null
+let autoEatLoadAttempted = false
 const armorManager = require('mineflayer-armor-manager')
 const nbt = require('prismarine-nbt')
 const recipeRegistry = require('./data/recipe-registry')
 
-const SETTINGS_FILE = path.join(__dirname, 'bot-settings.json')
+const IS_PACKAGED = typeof process.pkg !== 'undefined'
+const APP_BASE_DIR = IS_PACKAGED ? path.dirname(process.execPath) : __dirname
+const SETTINGS_FILE = path.join(APP_BASE_DIR, 'bot-settings.json')
+const BUNDLED_SETTINGS_FILE = path.join(__dirname, 'bot-settings.json')
 const STARTER_BOT_ID = 'starter'
 
 const DEFAULT_COMMAND_SETTINGS = {
@@ -142,48 +146,62 @@ function normalizeQueueSettings(settings) {
 }
 
 function loadBotSettings() {
-  try {
-    const raw = fs.readFileSync(SETTINGS_FILE, 'utf8')
-    const parsed = JSON.parse(raw)
+  const candidates = IS_PACKAGED
+    ? [SETTINGS_FILE, BUNDLED_SETTINGS_FILE]
+    : [SETTINGS_FILE]
 
-    return {
-      ...DEFAULT_BOT_SETTINGS,
-      ...parsed,
-      host: String(parsed.host || DEFAULT_BOT_SETTINGS.host),
-      version: String(parsed.version || DEFAULT_BOT_SETTINGS.version),
-      port: Number(parsed.port) || DEFAULT_BOT_SETTINGS.port,
-      viewerPort: Number(parsed.viewerPort) || DEFAULT_BOT_SETTINGS.viewerPort,
-      webPort: Number(parsed.webPort) || DEFAULT_BOT_SETTINGS.webPort,
-      starterUsername: String(parsed.starterUsername || parsed.username || DEFAULT_BOT_SETTINGS.starterUsername),
-      starterAuth: normalizeAuth(parsed.starterAuth),
-      starterToken: String(parsed.starterToken || ''),
-      viewerEnabled: typeof parsed.viewerEnabled === 'boolean' ? parsed.viewerEnabled : DEFAULT_BOT_SETTINGS.viewerEnabled,
-      tpsDashboardEnabled: typeof parsed.tpsDashboardEnabled === 'boolean' ? parsed.tpsDashboardEnabled : DEFAULT_BOT_SETTINGS.tpsDashboardEnabled,
-      viewerTargetBotId: String(parsed.viewerTargetBotId || STARTER_BOT_ID),
-      commandSettings: normalizeCommandSettings(parsed.commandSettings),
-      queueSettings: normalizeQueueSettings(parsed.queueSettings),
-      bots: safeArray(parsed.bots)
-        .map((bot) => ({
-          id: String(bot.id || ''),
-          username: String(bot.username || '').trim(),
-          auth: normalizeAuth(bot.auth),
-          token: String(bot.token || '')
-        }))
-        .filter((bot) => bot.id && bot.username),
-      groups: safeArray(parsed.groups)
-        .map((group) => ({
-          id: String(group.id || ''),
-          name: String(group.name || '').trim(),
-          botIds: safeArray(group.botIds).map((id) => String(id))
-        }))
-        .filter((group) => group.id && group.name)
+  for (const filePath of candidates) {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8')
+      const parsed = JSON.parse(raw)
+
+      return {
+        ...DEFAULT_BOT_SETTINGS,
+        ...parsed,
+        host: String(parsed.host || DEFAULT_BOT_SETTINGS.host),
+        version: String(parsed.version || DEFAULT_BOT_SETTINGS.version),
+        port: Number(parsed.port) || DEFAULT_BOT_SETTINGS.port,
+        viewerPort: Number(parsed.viewerPort) || DEFAULT_BOT_SETTINGS.viewerPort,
+        webPort: Number(parsed.webPort) || DEFAULT_BOT_SETTINGS.webPort,
+        starterUsername: String(parsed.starterUsername || parsed.username || DEFAULT_BOT_SETTINGS.starterUsername),
+        starterAuth: normalizeAuth(parsed.starterAuth),
+        starterToken: String(parsed.starterToken || ''),
+        viewerEnabled: typeof parsed.viewerEnabled === 'boolean' ? parsed.viewerEnabled : DEFAULT_BOT_SETTINGS.viewerEnabled,
+        tpsDashboardEnabled: typeof parsed.tpsDashboardEnabled === 'boolean' ? parsed.tpsDashboardEnabled : DEFAULT_BOT_SETTINGS.tpsDashboardEnabled,
+        viewerTargetBotId: String(parsed.viewerTargetBotId || STARTER_BOT_ID),
+        commandSettings: normalizeCommandSettings(parsed.commandSettings),
+        queueSettings: normalizeQueueSettings(parsed.queueSettings),
+        bots: safeArray(parsed.bots)
+          .map((bot) => ({
+            id: String(bot.id || ''),
+            username: String(bot.username || '').trim(),
+            auth: normalizeAuth(bot.auth),
+            token: String(bot.token || '')
+          }))
+          .filter((bot) => bot.id && bot.username),
+        groups: safeArray(parsed.groups)
+          .map((group) => ({
+            id: String(group.id || ''),
+            name: String(group.name || '').trim(),
+            botIds: safeArray(group.botIds).map((id) => String(id))
+          }))
+          .filter((group) => group.id && group.name)
+      }
+    } catch {
+      // Try the next candidate file.
     }
-  } catch {
-    return { ...DEFAULT_BOT_SETTINGS }
   }
+
+  return { ...DEFAULT_BOT_SETTINGS }
 }
 
 function saveBotSettings(settings) {
+  try {
+    fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true })
+  } catch {
+    // Ignore directory creation issues and attempt file write anyway.
+  }
+
   const normalized = {
     ...DEFAULT_BOT_SETTINGS,
     ...settings,
@@ -598,8 +616,118 @@ function stopViewer() {
   return true
 }
 
+function getMineflayerViewer() {
+  if (mineflayerViewer) return mineflayerViewer
+
+  try {
+    mineflayerViewer = require('prismarine-viewer').mineflayer
+    return mineflayerViewer
+  } catch (error) {
+    const message = error?.message || String(error)
+    pushWebLog('error', `Unable to start Prismarine viewer: ${message}`)
+    return null
+  }
+}
+
+function getAutoEatLoader() {
+  if (autoEatLoadAttempted) return autoEat
+  autoEatLoadAttempted = true
+
+  try {
+    autoEat = require('mineflayer-auto-eat').loader
+    return autoEat
+  } catch (error) {
+    const message = error?.message || String(error)
+    pushWebLog('error', `Auto-eat plugin unavailable: ${message}`)
+    return null
+  }
+}
+
+function installFallbackAutoEat(bot, getMcData, botId) {
+  let enabled = false
+  let isEating = false
+
+  const isFoodItem = (item) => {
+    if (!item) return false
+    if (typeof item.foodPoints === 'number' && item.foodPoints > 0) return true
+
+    const mcData = getMcData?.()
+    const foodsByName = mcData?.foodsByName
+    if (foodsByName && foodsByName[item.name]) return true
+
+    return false
+  }
+
+  const getBestFood = () => {
+    const foods = bot.inventory.items().filter(isFoodItem)
+    if (!foods.length) return null
+
+    foods.sort((a, b) => {
+      const pointsA = typeof a.foodPoints === 'number' ? a.foodPoints : 0
+      const pointsB = typeof b.foodPoints === 'number' ? b.foodPoints : 0
+      return pointsB - pointsA
+    })
+
+    return foods[0]
+  }
+
+  const eat = async () => {
+    if (isEating) return false
+    const foodItem = getBestFood()
+    if (!foodItem) throw new Error('No food in inventory')
+
+    isEating = true
+    try {
+      await bot.equip(foodItem, 'hand')
+      await bot.consume()
+      return true
+    } finally {
+      isEating = false
+    }
+  }
+
+  const maybeEat = () => {
+    if (!enabled) return
+    if (isEating) return
+    if (!bot.entity) return
+    if (typeof bot.food !== 'number') return
+    if (bot.food >= 18) return
+
+    eat().catch((error) => {
+      const message = error?.message || String(error)
+      pushWebLog('error', `Auto-eat fallback failed for ${botId}: ${message}`, botId)
+    })
+  }
+
+  const onPhysicsTick = () => {
+    maybeEat()
+  }
+
+  bot.on('physicsTick', onPhysicsTick)
+  bot.once('end', () => {
+    bot.removeListener('physicsTick', onPhysicsTick)
+  })
+
+  bot.autoEat = {
+    enableAuto() {
+      enabled = true
+    },
+    disableAuto() {
+      enabled = false
+    },
+    async eat() {
+      await eat()
+    }
+  }
+
+  pushWebLog('system', `Using fallback auto-eat implementation for ${botId}`, botId)
+}
+
 function startViewerFor(botId) {
   if (!viewerEnabled) return false
+
+  const viewer = getMineflayerViewer()
+  if (!viewer) return false
 
   const runtime = runtimes.get(botId)
   if (!runtime?.bot?.player) return false
@@ -617,7 +745,7 @@ function startViewerFor(botId) {
     return true
   }
 
-  mineflayerViewer(runtime.bot, {
+  viewer(runtime.bot, {
     port: botSettings.viewerPort,
     firstPerson: true,
     viewDistance: 5
@@ -750,7 +878,16 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
 
   bot.loadPlugin(pvp)
   bot.loadPlugin(collectBlock)
-  bot.loadPlugin(autoEat)
+  const autoEatLoader = getAutoEatLoader()
+  if (autoEatLoader) {
+    try {
+      bot.loadPlugin(autoEatLoader)
+    } catch (error) {
+      const message = error?.message || String(error)
+      pushWebLog('error', `Failed to load auto-eat plugin for ${id}: ${message}`, id)
+    }
+  }
+  if (!bot.autoEat) installFallbackAutoEat(bot, () => mcData, id)
   bot.loadPlugin(armorManager)
   bot.loadPlugin(tpsPlugin)
 
@@ -2349,6 +2486,9 @@ function startWebServer() {
 
   app.post('/api/settings', (req, res) => {
     const nextCommandSettings = normalizeCommandSettings(req.body?.commandSettings ?? botSettings.commandSettings)
+    const nextViewerEnabled = typeof req.body?.viewerEnabled === 'boolean'
+      ? req.body.viewerEnabled
+      : viewerEnabled
     const nextSettings = {
       ...botSettings,
       ...req.body,
@@ -2360,6 +2500,7 @@ function startWebServer() {
       starterUsername: String(req.body?.starterUsername ?? botSettings.starterUsername),
       starterAuth: normalizeAuth(req.body?.starterAuth ?? botSettings.starterAuth),
       starterToken: String(req.body?.starterToken ?? botSettings.starterToken),
+      viewerEnabled: nextViewerEnabled,
       tpsDashboardEnabled: typeof req.body?.tpsDashboardEnabled === 'boolean'
         ? req.body.tpsDashboardEnabled
         : tpsDashboardEnabled,
@@ -2376,6 +2517,12 @@ function startWebServer() {
     Object.assign(botSettings, nextSettings)
     if (nextSettings.version !== previousVersion) {
       autocompleteItems = buildAutocompleteItems(nextSettings.version)
+    }
+    viewerEnabled = Boolean(nextSettings.viewerEnabled)
+    if (viewerEnabled) {
+      startViewerFor(botSettings.viewerTargetBotId)
+    } else {
+      stopViewer()
     }
     tpsDashboardEnabled = Boolean(nextSettings.tpsDashboardEnabled)
     saveBotSettings(botSettings)

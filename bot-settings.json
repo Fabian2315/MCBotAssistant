@@ -7,7 +7,7 @@
   "starterUsername": "Bot",
   "starterAuth": "offline",
   "starterToken": "",
-  "viewerEnabled": false,
+  "viewerEnabled": true,
   "tpsDashboardEnabled": true,
   "viewerTargetBotId": "starter",
   "commandSettings": {
