@@ -9,6 +9,18 @@
   "starterToken": "",
   "viewerEnabled": false,
   "viewerTargetBotId": "starter",
+  "commandSettings": {
+    "rangeGoal": 1,
+    "emptyInventoryRadius": 50,
+    "collectRadius": 64,
+    "mineSearchRadius": 64,
+    "mineRoamMinDistance": 50,
+    "mineRoamMaxDistance": 100,
+    "guardProtectRadius": 16,
+    "guardContinuePursuitRadius": 20,
+    "selfDefenseTargetDistance": 12,
+    "selfDefenseChaseDistance": 14
+  },
   "bots": [],
   "groups": []
 }

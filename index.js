@@ -19,6 +19,19 @@ const nbt = require('prismarine-nbt')
 const SETTINGS_FILE = path.join(__dirname, 'bot-settings.json')
 const STARTER_BOT_ID = 'starter'
 
+const DEFAULT_COMMAND_SETTINGS = {
+  rangeGoal: 1,
+  emptyInventoryRadius: 50,
+  collectRadius: 64,
+  mineSearchRadius: 64,
+  mineRoamMinDistance: 50,
+  mineRoamMaxDistance: 100,
+  guardProtectRadius: 16,
+  guardContinuePursuitRadius: 20,
+  selfDefenseTargetDistance: 12,
+  selfDefenseChaseDistance: 14
+}
+
 const DEFAULT_BOT_SETTINGS = {
   host: 'localhost',
   port: 25565,
@@ -30,6 +43,7 @@ const DEFAULT_BOT_SETTINGS = {
   starterToken: '',
   viewerEnabled: true,
   viewerTargetBotId: STARTER_BOT_ID,
+  commandSettings: { ...DEFAULT_COMMAND_SETTINGS },
   bots: [],
   groups: []
 }
@@ -42,6 +56,33 @@ function normalizeAuth(value) {
   const auth = String(value || 'offline').toLowerCase()
   if (auth === 'microsoft' || auth === 'token') return auth
   return 'offline'
+}
+
+function normalizeNumber(value, fallback, options = {}) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+
+  let normalized = number
+  if (options.integer) normalized = Math.round(normalized)
+  if (typeof options.min === 'number') normalized = Math.max(options.min, normalized)
+  if (typeof options.max === 'number') normalized = Math.min(options.max, normalized)
+  return normalized
+}
+
+function normalizeCommandSettings(settings) {
+  const input = settings || {}
+  return {
+    rangeGoal: normalizeNumber(input.rangeGoal, DEFAULT_COMMAND_SETTINGS.rangeGoal, { min: 0, integer: true }),
+    emptyInventoryRadius: normalizeNumber(input.emptyInventoryRadius, DEFAULT_COMMAND_SETTINGS.emptyInventoryRadius, { min: 1, integer: true }),
+    collectRadius: normalizeNumber(input.collectRadius, DEFAULT_COMMAND_SETTINGS.collectRadius, { min: 1, integer: true }),
+    mineSearchRadius: normalizeNumber(input.mineSearchRadius, DEFAULT_COMMAND_SETTINGS.mineSearchRadius, { min: 1, integer: true }),
+    mineRoamMinDistance: normalizeNumber(input.mineRoamMinDistance, DEFAULT_COMMAND_SETTINGS.mineRoamMinDistance, { min: 1 }),
+    mineRoamMaxDistance: normalizeNumber(input.mineRoamMaxDistance, DEFAULT_COMMAND_SETTINGS.mineRoamMaxDistance, { min: 1 }),
+    guardProtectRadius: normalizeNumber(input.guardProtectRadius, DEFAULT_COMMAND_SETTINGS.guardProtectRadius, { min: 1, integer: true }),
+    guardContinuePursuitRadius: normalizeNumber(input.guardContinuePursuitRadius, DEFAULT_COMMAND_SETTINGS.guardContinuePursuitRadius, { min: 1, integer: true }),
+    selfDefenseTargetDistance: normalizeNumber(input.selfDefenseTargetDistance, DEFAULT_COMMAND_SETTINGS.selfDefenseTargetDistance, { min: 1, integer: true }),
+    selfDefenseChaseDistance: normalizeNumber(input.selfDefenseChaseDistance, DEFAULT_COMMAND_SETTINGS.selfDefenseChaseDistance, { min: 1, integer: true })
+  }
 }
 
 function loadBotSettings() {
@@ -62,6 +103,7 @@ function loadBotSettings() {
       starterToken: String(parsed.starterToken || ''),
       viewerEnabled: typeof parsed.viewerEnabled === 'boolean' ? parsed.viewerEnabled : DEFAULT_BOT_SETTINGS.viewerEnabled,
       viewerTargetBotId: String(parsed.viewerTargetBotId || STARTER_BOT_ID),
+      commandSettings: normalizeCommandSettings(parsed.commandSettings),
       bots: safeArray(parsed.bots)
         .map((bot) => ({
           id: String(bot.id || ''),
@@ -97,6 +139,7 @@ function saveBotSettings(settings) {
     starterToken: String(settings.starterToken || ''),
     viewerEnabled: typeof settings.viewerEnabled === 'boolean' ? settings.viewerEnabled : DEFAULT_BOT_SETTINGS.viewerEnabled,
     viewerTargetBotId: String(settings.viewerTargetBotId || STARTER_BOT_ID),
+    commandSettings: normalizeCommandSettings(settings.commandSettings),
     bots: safeArray(settings.bots)
       .map((bot) => ({
         id: String(bot.id || ''),
@@ -125,10 +168,6 @@ let lastStateSignature = ''
 let viewerEnabled = Boolean(botSettings.viewerEnabled)
 let viewerAttachedBotId = null
 
-const RANGE_GOAL = 1
-const EMPTY_INVENTORY_RADIUS = 50
-const SELF_DEFENSE_MAX_TARGET_DISTANCE = 12
-const SELF_DEFENSE_MAX_CHASE_DISTANCE = 14
 const HOSTILE_ENTITY_NAMES = new Set([
   'zombie',
   'husk',
@@ -479,6 +518,13 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
     return state
   }
 
+  function getCommandSettings() {
+    return {
+      ...DEFAULT_COMMAND_SETTINGS,
+      ...(botSettings.commandSettings || {})
+    }
+  }
+
   function say(text) {
     if (typeof bot.chat === 'function') {
       bot.chat(text)
@@ -507,21 +553,23 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
     }
 
     if (currentMeta?.type === 'follow') {
+      const commandSettings = getCommandSettings()
       goalIntent = {
         type: 'follow',
         dynamic: true,
         entity: currentMeta.entity || null,
         username: currentMeta.username || null,
-        range: typeof currentMeta.range === 'number' ? currentMeta.range : RANGE_GOAL
+        range: typeof currentMeta.range === 'number' ? currentMeta.range : commandSettings.rangeGoal
       }
     }
 
     if (goalIntent.type !== 'follow' && currentGoal && currentGoal.constructor?.name === 'GoalFollow' && currentGoal.entity) {
+      const commandSettings = getCommandSettings()
       goalIntent = {
         type: 'follow',
         dynamic: true,
         entity: currentGoal.entity,
-        range: typeof currentGoal.range === 'number' ? currentGoal.range : RANGE_GOAL
+        range: typeof currentGoal.range === 'number' ? currentGoal.range : commandSettings.rangeGoal
       }
     }
 
@@ -612,7 +660,8 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
     if (entity.isValid === false) return false
     if (entity.type === 'player') return false
     if (!entity.position || typeof entity.position.distanceTo !== 'function') return false
-    if (entity.position.distanceTo(bot.entity.position) > SELF_DEFENSE_MAX_TARGET_DISTANCE) return false
+    const commandSettings = getCommandSettings()
+    if (entity.position.distanceTo(bot.entity.position) > commandSettings.selfDefenseTargetDistance) return false
 
     const entityName = (entity.name || '').toLowerCase()
     const displayName = (entity.displayName || '').toLowerCase().replace(/\s+/g, '_')
@@ -732,9 +781,10 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
     try {
       await equipBestSword({ silent: true })
       bot.pathfinder.setMovements(defaultMove)
-      setTrackedGoal(new GoalFollow(attacker, RANGE_GOAL), true)
+      const commandSettings = getCommandSettings()
+      setTrackedGoal(new GoalFollow(attacker, commandSettings.rangeGoal), true)
       bot.pvp.attack(attacker)
-      await waitForEntityToBeDead(attacker, { maxDistance: SELF_DEFENSE_MAX_CHASE_DISTANCE })
+      await waitForEntityToBeDead(attacker, { maxDistance: commandSettings.selfDefenseChaseDistance })
     } catch (error) {
       say(`ERROR: Self defense failed: ${error.message}`)
     } finally {
@@ -783,9 +833,10 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
   }
 
   async function handleEmptyInventory() {
+    const commandSettings = getCommandSettings()
     const chestBlock = bot.findBlock({
       matching: (block) => block && block.name === 'chest',
-      maxDistance: EMPTY_INVENTORY_RADIUS
+      maxDistance: commandSettings.emptyInventoryRadius
     })
 
     if (!chestBlock) {
@@ -828,7 +879,8 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
   }
 
   async function collectBlockType(blockType, options = {}) {
-    const radius = options.radius || 64
+    const commandSettings = getCommandSettings()
+    const radius = options.radius || commandSettings.collectRadius
 
     const block = bot.findBlock({
       matching: (candidate) => candidate && candidate.name === blockType,
@@ -867,7 +919,7 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
 
         const block = bot.findBlock({
           matching: (candidate) => candidate && candidate.name === blockType,
-          maxDistance: 64
+          maxDistance: getCommandSettings().mineSearchRadius
         })
 
         if (block) {
@@ -891,7 +943,9 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
         }
 
         const angle = Math.random() * 2 * Math.PI
-        const distance = 50 + Math.random() * 50
+        const commandSettings = getCommandSettings()
+        const distanceWindow = Math.max(0, commandSettings.mineRoamMaxDistance - commandSettings.mineRoamMinDistance)
+        const distance = commandSettings.mineRoamMinDistance + Math.random() * distanceWindow
         const newX = originalPos.x + distance * Math.cos(angle)
         const newZ = originalPos.z + distance * Math.sin(angle)
         const newY = originalPos.y
@@ -985,6 +1039,7 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
 
   function processCommand(usernameFromChat, input) {
     const message = normalizeCommand(input)
+    const commandSettings = getCommandSettings()
 
     switch (true) {
       case message === 'Bot.test':
@@ -997,7 +1052,7 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
           break
         }
         bot.pathfinder.setMovements(defaultMove)
-        setTrackedGoal(new GoalNear(target.position.x, target.position.y, target.position.z, RANGE_GOAL))
+        setTrackedGoal(new GoalNear(target.position.x, target.position.y, target.position.z, commandSettings.rangeGoal))
         say(`Coming to ${usernameFromChat}`)
         break
       }
@@ -1011,11 +1066,11 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
             break
           }
           bot.pathfinder.setMovements(defaultMove)
-          setTrackedGoal(new GoalFollow(target, RANGE_GOAL), true, {
+          setTrackedGoal(new GoalFollow(target, commandSettings.rangeGoal), true, {
             type: 'follow',
             entity: target,
             username: args[0],
-            range: RANGE_GOAL
+            range: commandSettings.rangeGoal
           })
           say(`Going to ${args[0]}`)
           break
@@ -1028,7 +1083,7 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
             break
           }
           bot.pathfinder.setMovements(defaultMove)
-          setTrackedGoal(new GoalNear(x, y, z, RANGE_GOAL), false)
+          setTrackedGoal(new GoalNear(x, y, z, commandSettings.rangeGoal), false)
           say(`Going to position ${x} ${y} ${z}`)
           break
         }
@@ -1050,11 +1105,11 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
         }
 
         bot.pathfinder.setMovements(defaultMove)
-        setTrackedGoal(new GoalFollow(nearest, RANGE_GOAL), true, {
+        setTrackedGoal(new GoalFollow(nearest, commandSettings.rangeGoal), true, {
           type: 'follow',
           entity: nearest,
           username: nearest.username,
-          range: RANGE_GOAL
+          range: commandSettings.rangeGoal
         })
         say(`Going to nearest player: ${nearest.username}`)
         break
@@ -1067,11 +1122,11 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
           break
         }
         bot.pathfinder.setMovements(defaultMove)
-        setTrackedGoal(new GoalFollow(target, RANGE_GOAL), true, {
+        setTrackedGoal(new GoalFollow(target, commandSettings.rangeGoal), true, {
           type: 'follow',
           entity: target,
           username: targetName,
-          range: RANGE_GOAL
+          range: commandSettings.rangeGoal
         })
         say(`Following ${targetName}`)
         break
@@ -1084,7 +1139,7 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
           break
         }
         bot.pathfinder.setMovements(defaultMove)
-        setTrackedGoal(new GoalFollow(target, RANGE_GOAL), true)
+        setTrackedGoal(new GoalFollow(target, commandSettings.rangeGoal), true)
         bot.pvp.attack(target)
         say(`Attacking ${targetName}`)
         break
@@ -1232,19 +1287,21 @@ function createBotRuntime({ id, username, auth = 'offline', token = '', isStarte
 
     const currentTarget = bot.pvp.target
     if (currentTarget) {
+      const commandSettings = getCommandSettings()
       const hasPos = currentTarget.position && typeof currentTarget.position.distanceTo === 'function'
       const stillValid = currentTarget.isValid !== false
-      const stillNearGuard = hasPos && currentTarget.position.distanceTo(guardPos) < 20
+      const stillNearGuard = hasPos && currentTarget.position.distanceTo(guardPos) < commandSettings.guardContinuePursuitRadius
       if (stillValid && stillNearGuard) return
       bot.pvp.stop()
     }
 
     const entity = bot.nearestEntity((candidate) => {
+      const commandSettings = getCommandSettings()
       if (!candidate) return false
       if (candidate.type === 'player') return false
       if (candidate.isValid === false) return false
       if (!candidate.position || typeof candidate.position.distanceTo !== 'function') return false
-      if (candidate.position.distanceTo(guardPos) >= 16) return false
+      if (candidate.position.distanceTo(guardPos) >= commandSettings.guardProtectRadius) return false
       if (candidate.displayName === 'Armor Stand') return false
       if (candidate.name === 'item' || candidate.name === 'experience_orb') return false
       return true
@@ -1436,6 +1493,7 @@ function startWebServer() {
   })
 
   app.post('/api/settings', (req, res) => {
+    const nextCommandSettings = normalizeCommandSettings(req.body?.commandSettings ?? botSettings.commandSettings)
     const nextSettings = {
       ...botSettings,
       ...req.body,
@@ -1447,7 +1505,8 @@ function startWebServer() {
       starterUsername: String(req.body?.starterUsername ?? botSettings.starterUsername),
       starterAuth: normalizeAuth(req.body?.starterAuth ?? botSettings.starterAuth),
       starterToken: String(req.body?.starterToken ?? botSettings.starterToken),
-      viewerTargetBotId: String(req.body?.viewerTargetBotId || botSettings.viewerTargetBotId)
+      viewerTargetBotId: String(req.body?.viewerTargetBotId || botSettings.viewerTargetBotId),
+      commandSettings: nextCommandSettings
     }
 
     if (!runtimes.has(nextSettings.viewerTargetBotId)) {

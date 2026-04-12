@@ -384,6 +384,20 @@ function renderAll() {
 
 function readSettingsForm() {
   const data = new FormData(settingsForm)
+
+  const commandSettings = {
+    rangeGoal: Number(data.get('rangeGoal')),
+    emptyInventoryRadius: Number(data.get('emptyInventoryRadius')),
+    collectRadius: Number(data.get('collectRadius')),
+    mineSearchRadius: Number(data.get('mineSearchRadius')),
+    mineRoamMinDistance: Number(data.get('mineRoamMinDistance')),
+    mineRoamMaxDistance: Number(data.get('mineRoamMaxDistance')),
+    guardProtectRadius: Number(data.get('guardProtectRadius')),
+    guardContinuePursuitRadius: Number(data.get('guardContinuePursuitRadius')),
+    selfDefenseTargetDistance: Number(data.get('selfDefenseTargetDistance')),
+    selfDefenseChaseDistance: Number(data.get('selfDefenseChaseDistance'))
+  }
+
   return {
     host: String(data.get('host') || '').trim(),
     port: Number(data.get('port')),
@@ -393,7 +407,8 @@ function readSettingsForm() {
     starterUsername: String(data.get('starterUsername') || '').trim(),
     starterAuth: String(data.get('starterAuth') || 'offline'),
     starterToken: String(data.get('starterToken') || ''),
-    viewerTargetBotId: String(data.get('viewerTargetBotId') || '')
+    viewerTargetBotId: String(data.get('viewerTargetBotId') || ''),
+    commandSettings
   }
 }
 
@@ -406,6 +421,19 @@ function fillSettingsForm(settings) {
   settingsForm.starterUsername.value = settings.starterUsername || 'Bot'
   settingsForm.starterAuth.value = settings.starterAuth || 'offline'
   settingsForm.starterToken.value = settings.starterToken || ''
+
+  const commandSettings = settings.commandSettings || {}
+  settingsForm.rangeGoal.value = commandSettings.rangeGoal ?? 1
+  settingsForm.emptyInventoryRadius.value = commandSettings.emptyInventoryRadius ?? 50
+  settingsForm.collectRadius.value = commandSettings.collectRadius ?? 64
+  settingsForm.mineSearchRadius.value = commandSettings.mineSearchRadius ?? 64
+  settingsForm.mineRoamMinDistance.value = commandSettings.mineRoamMinDistance ?? 50
+  settingsForm.mineRoamMaxDistance.value = commandSettings.mineRoamMaxDistance ?? 100
+  settingsForm.guardProtectRadius.value = commandSettings.guardProtectRadius ?? 16
+  settingsForm.guardContinuePursuitRadius.value = commandSettings.guardContinuePursuitRadius ?? 20
+  settingsForm.selfDefenseTargetDistance.value = commandSettings.selfDefenseTargetDistance ?? 12
+  settingsForm.selfDefenseChaseDistance.value = commandSettings.selfDefenseChaseDistance ?? 14
+
   starterTokenRow.style.display = settingsForm.starterAuth.value === 'token' ? 'grid' : 'none'
 }
 

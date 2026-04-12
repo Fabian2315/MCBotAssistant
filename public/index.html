@@ -229,6 +229,23 @@
               <label>Viewer Bot
                 <select name="viewerTargetBotId" id="viewerTargetBotId"></select>
               </label>
+
+              <details class="settings-dropdown">
+                <summary>Command Range Settings</summary>
+                <div class="settings-dropdown-body">
+                  <label>Goal Range (<code>goto/follow/attack/come</code>)<input name="rangeGoal" type="number" min="0" step="1" required></label>
+                  <label>Empty Chest Search Radius (<code>Bot.empty</code>)<input name="emptyInventoryRadius" type="number" min="1" step="1" required></label>
+                  <label>Collect Search Radius (<code>Bot.collect</code>)<input name="collectRadius" type="number" min="1" step="1" required></label>
+                  <label>Mine Search Radius (<code>Bot.mine</code>)<input name="mineSearchRadius" type="number" min="1" step="1" required></label>
+                  <label>Mine Roam Min Distance (<code>Bot.mine</code>)<input name="mineRoamMinDistance" type="number" min="1" step="1" required></label>
+                  <label>Mine Roam Max Distance (<code>Bot.mine</code>)<input name="mineRoamMaxDistance" type="number" min="1" step="1" required></label>
+                  <label>Guard Protect Radius (<code>Bot.guard</code>)<input name="guardProtectRadius" type="number" min="1" step="1" required></label>
+                  <label>Guard Continue Radius (<code>Bot.guard</code>)<input name="guardContinuePursuitRadius" type="number" min="1" step="1" required></label>
+                  <label>Self Defense Target Distance<input name="selfDefenseTargetDistance" type="number" min="1" step="1" required></label>
+                  <label>Self Defense Chase Distance<input name="selfDefenseChaseDistance" type="number" min="1" step="1" required></label>
+                </div>
+              </details>
+
               <div class="inline-actions wide">
                 <button type="submit">Save Settings</button>
                 <button type="button" id="switchViewerBtn">Switch Viewer Now</button>

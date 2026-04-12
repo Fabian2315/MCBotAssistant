@@ -450,6 +450,36 @@ button,
   gap: 0.3rem;
 }
 
+.settings-dropdown {
+  grid-column: 1 / -1;
+  border: 1px solid #d9d2c2;
+  border-radius: 0.8rem;
+  background: #fff;
+  padding: 0.5rem 0.65rem;
+}
+
+.settings-dropdown summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #1f2a2d;
+  user-select: none;
+}
+
+.settings-dropdown[open] summary {
+  margin-bottom: 0.55rem;
+}
+
+.settings-dropdown-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.7rem;
+}
+
+.settings-dropdown-body code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.78rem;
+}
+
 .inline-actions {
   display: flex;
   gap: 0.5rem;
