@@ -277,7 +277,7 @@ function startViewerFor(botId) {
     port: botSettings.viewerPort,
     firstPerson: true,
     viewDistance: 5
-  })
+  }) 
   viewerAttachedBotId = botId
   pushWebLog('system', `Prismarine viewer active on ${botId} at ${getViewerUrl()}`, botId)
   return true
